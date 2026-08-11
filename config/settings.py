@@ -46,6 +46,7 @@ INSTALLED_APPS = [
     'notifications',
     'complaints',
     'core',
+    'phonenumber_field',
 ]
 
 MIDDLEWARE = [
