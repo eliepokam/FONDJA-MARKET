@@ -25,7 +25,7 @@ class PhotoColis(models.Model):
         HistoriqueStatutColis, on_delete=models.SET_NULL, null=True, blank=True, related_name='photos'
     )
     type_media = models.CharField(max_length=10, choices=TypeMedia.choices, default=TypeMedia.PHOTO)
-    url = models.CharField(max_length=255)
+    url = models.ImageField(upload_to='colis_photos/%Y/%m/')
     agent = models.ForeignKey(
         'users.Agent', on_delete=models.RESTRICT, null=True, blank=True, related_name='photos_prises'
     )
