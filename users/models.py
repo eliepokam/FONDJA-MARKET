@@ -1,18 +1,29 @@
-from django.contrib.auth.base_user import AbstractBaseUser
+from django.contrib.auth.base_user import AbstractBaseUser, BaseUserManager
 from django.contrib.auth.hashers import make_password
+from django.contrib.auth.models import PermissionsMixin
 from phonenumber_field.modelfields import PhoneNumberField
 from django.db import models
 
 
-class UtilisateurManager(models.Manager):
-    def create_utilisateur(self, telephone, nom, password, **extra):
+class UtilisateurManager(BaseUserManager):
+    def create_utilisateur(self, telephone, nom, password=None, **extra):
+        if not telephone:
+            raise ValueError("Le téléphone est obligatoire.")
         utilisateur = self.model(telephone=telephone, nom=nom, **extra)
         utilisateur.password = make_password(password)
         utilisateur.save(using=self._db)
         return utilisateur
 
+    # Django appelle ces deux méthodes précises via createsuperuser — noms imposés, pas de liberté ici
+    def create_user(self, telephone, nom, password=None, **extra):
+        return self.create_utilisateur(telephone, nom, password, **extra)
 
-class Utilisateur(AbstractBaseUser):
+    def create_superuser(self, telephone, nom, password=None, **extra):
+        extra.setdefault('is_superuser', True)
+        return self.create_utilisateur(telephone, nom, password, **extra)
+
+
+class Utilisateur(AbstractBaseUser, PermissionsMixin):
     class Statut(models.TextChoices):
         ACTIF = 'actif', 'Actif'
         DESACTIVE = 'desactive', 'Désactivé'
@@ -25,7 +36,7 @@ class Utilisateur(AbstractBaseUser):
     jeton_connexion = models.CharField(max_length=100, null=True, blank=True)
     cree_le = models.DateTimeField(auto_now_add=True)
     modifie_le = models.DateTimeField(auto_now=True)
-    is_superuser = models.BooleanField(default=False)
+    # is_superuser : SUPPRIME d'ici, fourni maintenant par PermissionsMixin
 
     USERNAME_FIELD = 'telephone'
     REQUIRED_FIELDS = ['nom']
@@ -38,14 +49,13 @@ class Utilisateur(AbstractBaseUser):
 
     @property
     def is_staff(self):
-        return hasattr(self, 'administrateur')
+        return self.is_superuser or hasattr(self, 'administrateur')
 
     class Meta:
         db_table = 'utilisateurs'
 
     def __str__(self):
         return f"{self.nom} ({self.telephone})"
-
 
 class Client(Utilisateur):
     utilisateur_ptr = models.OneToOneField(
