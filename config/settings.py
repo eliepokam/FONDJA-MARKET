@@ -49,6 +49,7 @@ INSTALLED_APPS = [
     'core',
     'phonenumber_field',
     'rest_framework',
+    'drf_spectacular',
 ]
 
 REST_FRAMEWORK = {
@@ -58,6 +59,13 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
     ),
+    'DEFAULT_SCHEMA_CLASS': 'drf_spectacular.openapi.AutoSchema',
+}
+
+SPECTACULAR_SETTINGS = {
+    'TITLE': 'Fondja Market API',
+    'DESCRIPTION': 'API de gestion et suivi de colis Chine-Cameroun',
+    'VERSION': '1.0.0',
 }
 
 SIMPLE_JWT = {

@@ -1,5 +1,6 @@
 from django.db import models
 from django.db.models import Q
+from django.core.validators import MinValueValidator
 
 # Create your models here.
 
@@ -34,13 +35,13 @@ class Colis(models.Model):
     )
     code_suivi = models.CharField(max_length=30, unique=True)
     description = models.TextField(null=True, blank=True)
-    poids_kg = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True)
-    volume_m3 = models.DecimalField(max_digits=8, decimal_places=3, null=True, blank=True)
+    poids_kg = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
+    volume_m3 = models.DecimalField(max_digits=8, decimal_places=3, null=True, blank=True, validators=[MinValueValidator(0)])
     mode_transport = models.CharField(max_length=20, choices=ModeTransport.choices)
     photo_declaree_url = models.CharField(max_length=255, null=True, blank=True)
     statut = models.CharField(max_length=20, choices=Statut.choices, default=Statut.DECLAREE)
-    cout_estime = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    cout_final = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    cout_estime = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
+    cout_final = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
     date_livraison_estimee = models.DateField(null=True, blank=True)
     numero_besc = models.CharField(max_length=50, null=True, blank=True)
     cree_le = models.DateTimeField(auto_now_add=True)
@@ -59,8 +60,8 @@ class Colis(models.Model):
 
 class Tarif(models.Model):
     mode_transport = models.CharField(max_length=20, choices=Colis.ModeTransport.choices)
-    prix_par_kg = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
-    prix_par_m3 = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True)
+    prix_par_kg = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
+    prix_par_m3 = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
     delai_estime_jours = models.PositiveSmallIntegerField(null=True, blank=True)
     devise = models.CharField(max_length=3, default='XAF')
     actif = models.BooleanField(default=True)
