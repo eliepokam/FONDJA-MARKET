@@ -1,5 +1,6 @@
 from django.db import models
 from django.db.models import Q
+from decimal import Decimal
 from django.core.validators import MinValueValidator
 
 # Create your models here.
@@ -22,7 +23,7 @@ class Paiement(models.Model):
 
     colis = models.ForeignKey('shipments.Colis', on_delete=models.RESTRICT, related_name='paiements')
     client = models.ForeignKey('users.Client', on_delete=models.RESTRICT, related_name='paiements')
-    montant = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(0.01)])
+    montant = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(Decimal(0.01))])
     devise = models.CharField(max_length=3, default='XAF')
     methode = models.CharField(max_length=20, choices=Methode.choices)
     moment = models.CharField(max_length=20, choices=Moment.choices)
@@ -34,6 +35,7 @@ class Paiement(models.Model):
 
     class Meta:
         db_table = 'paiements'
+        ordering = ['-cree_le']
         constraints = [
             models.CheckConstraint(
                 condition=~Q(methode='especes', moment='en_ligne'),

@@ -29,6 +29,7 @@ class Reclamation(models.Model):
 
     class Meta:
         db_table = 'reclamations'
+        ordering = ['-cree_le']
         indexes = [models.Index(fields=['colis']), models.Index(fields=['statut'])]
 
     def __str__(self):
