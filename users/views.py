@@ -1,4 +1,5 @@
 import random
+import logging
 from datetime import timedelta
 
 from django.utils import timezone
@@ -14,6 +15,7 @@ from .serializers import RegisterSerializer, VerifyOtpSerializer, UtilisateurSer
 from .models import Utilisateur, CodeOtp
 from .serializers import RegisterSerializer, VerifyOtpSerializer
 
+logger = logging.getLogger('django')
 
 class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
@@ -30,11 +32,11 @@ class RegisterView(generics.CreateAPIView):
             expire_le=timezone.now() + timedelta(minutes=5),
         )
         # Simulation — le vrai envoi SMS/WhatsApp viendra plus tard
-        print(f"[OTP SIMULÉ] {code} envoyé à {client.telephone} via {canal}")
-
+        logger.info(f"[OTP SIMULÉ] {code} envoyé à {client.telephone} via {canal}")
 
 class VerifyOtpView(APIView):
     permission_classes = [AllowAny]
+    MAX_TENTATIVES = 5
 
     def post(self, request):
         serializer = VerifyOtpSerializer(data=request.data)
@@ -48,11 +50,26 @@ class VerifyOtpView(APIView):
             return Response({'detail': 'Utilisateur introuvable.'}, status=status.HTTP_404_NOT_FOUND)
 
         otp = CodeOtp.objects.filter(
-            utilisateur=utilisateur, code=code, verifie_le__isnull=True
+            utilisateur=utilisateur, verifie_le__isnull=True
         ).order_by('-cree_le').first()
 
         if not otp or otp.expire_le < timezone.now():
             return Response({'detail': 'Code invalide ou expiré.'}, status=status.HTTP_400_BAD_REQUEST)
+        if otp.tentatives >= self.MAX_TENTATIVES:
+            return Response(
+                {'detail': 'Trop de tentatives. Demandez un nouveau code.'},
+                status=status.HTTP_429_TOO_MANY_REQUESTS
+            )
+
+        if otp.code != code:
+            otp.tentatives += 1
+            otp.save()
+            restantes = self.MAX_TENTATIVES - otp.tentatives
+            return Response(
+                {'detail': f'Code incorrect. {restantes} tentative(s) restante(s).'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
 
         otp.verifie_le = timezone.now()
         otp.save()

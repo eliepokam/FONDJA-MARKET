@@ -49,6 +49,7 @@ class Colis(models.Model):
 
     class Meta:
         db_table = 'colis'
+        ordering = ['-cree_le']
         indexes = [
             models.Index(fields=['client']),
             models.Index(fields=['statut']),

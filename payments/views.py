@@ -10,6 +10,7 @@ from users.permissions import IsClient, IsAdministrateur
 
 class PaiementViewSet(viewsets.ModelViewSet):
     serializer_class = PaiementSerializer
+    filterset_fields = ['statut', 'methode']
 
     def get_queryset(self):
         user = self.request.user

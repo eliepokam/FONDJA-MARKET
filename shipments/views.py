@@ -7,6 +7,8 @@ from users.permissions import IsClient, IsAdministrateur, IsAgent
 
 class ColisViewSet(viewsets.ModelViewSet):
     serializer_class = ColisSerializer
+    filterset_fields = ['statut', 'mode_transport']
+    search_fields = ['code_suivi']
 
     def get_queryset(self):
         user = self.request.user
