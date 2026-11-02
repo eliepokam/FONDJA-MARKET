@@ -2,6 +2,7 @@ from django.db import models
 from django.db.models import Q
 from decimal import Decimal
 from django.core.validators import MinValueValidator
+from phonenumber_field.modelfields import PhoneNumberField
 
 # Create your models here.
 
@@ -23,11 +24,13 @@ class Paiement(models.Model):
 
     colis = models.ForeignKey('shipments.Colis', on_delete=models.RESTRICT, related_name='paiements')
     client = models.ForeignKey('users.Client', on_delete=models.RESTRICT, related_name='paiements')
-    montant = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(Decimal(0.01))])
+    montant = models.DecimalField(max_digits=10, decimal_places=2, validators=[MinValueValidator(Decimal('0.01'))])
     devise = models.CharField(max_length=3, default='XAF')
     methode = models.CharField(max_length=20, choices=Methode.choices)
     moment = models.CharField(max_length=20, choices=Moment.choices)
     statut = models.CharField(max_length=20, choices=Statut.choices, default=Statut.EN_ATTENTE)
+    # Numéro Mobile Money à débiter (saisi par le client, peut différer de son numéro de compte).
+    telephone_paiement = PhoneNumberField(null=True, blank=True)
     reference_prestataire = models.CharField(max_length=100, null=True, blank=True)
     paye_le = models.DateTimeField(null=True, blank=True)
     cree_le = models.DateTimeField(auto_now_add=True)
@@ -49,4 +52,4 @@ class Paiement(models.Model):
         ]
 
     def __str__(self):
-        return f"{self.montant} {self.devise} — {self.get_statut_display()}"
+        return f"{self.montant} {self.devise} — {self.get_statut_display()}"

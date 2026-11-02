@@ -26,7 +26,10 @@ class InscriptionOtpTests(APITestCase):
             'telephone': '+237677000002', 'code': otp.code,
         })
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIn('access', response.data)
+        # Les jetons voyagent dans des cookies httpOnly (illisibles par le JavaScript), pas dans le corps.
+        self.assertIn('access_token', response.cookies)
+        self.assertIn('refresh_token', response.cookies)
+        self.assertNotIn('access', response.data)
 
     def test_mauvais_code_otp_incremente_les_tentatives(self):
         self.client.post('/api/auth/register/', {

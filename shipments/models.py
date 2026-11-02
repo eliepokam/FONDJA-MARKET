@@ -37,6 +37,8 @@ class Colis(models.Model):
     description = models.TextField(null=True, blank=True)
     poids_kg = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
     volume_m3 = models.DecimalField(max_digits=8, decimal_places=3, null=True, blank=True, validators=[MinValueValidator(0)])
+    poids_declare_kg = models.DecimalField(max_digits=8, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
+    volume_declare_m3 = models.DecimalField(max_digits=8, decimal_places=3, null=True, blank=True, validators=[MinValueValidator(0)])
     mode_transport = models.CharField(max_length=20, choices=ModeTransport.choices)
     photo_declaree_url = models.CharField(max_length=255, null=True, blank=True)
     statut = models.CharField(max_length=20, choices=Statut.choices, default=Statut.DECLAREE)
@@ -63,7 +65,8 @@ class Tarif(models.Model):
     mode_transport = models.CharField(max_length=20, choices=Colis.ModeTransport.choices)
     prix_par_kg = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
     prix_par_m3 = models.DecimalField(max_digits=10, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
-    delai_estime_jours = models.PositiveSmallIntegerField(null=True, blank=True)
+    delai_min_jours = models.PositiveSmallIntegerField(null=True, blank=True)
+    delai_max_jours = models.PositiveSmallIntegerField(null=True, blank=True)
     devise = models.CharField(max_length=3, default='XAF')
     actif = models.BooleanField(default=True)
     administrateur = models.ForeignKey(

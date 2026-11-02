@@ -1,4 +1,5 @@
 from django.db import models
+from users.models import Utilisateur
 
 # Create your models here.
 
@@ -29,3 +30,8 @@ class Notification(models.Model):
     class Meta:
         db_table = 'notifications'
         indexes = [models.Index(fields=['utilisateur', 'lu_le'])]
+
+class FCMToken(models.Model):
+    utilisateur = models.ForeignKey(Utilisateur, on_delete=models.CASCADE, related_name='fcm_tokens')
+    token = models.CharField(max_length=255, unique=True)
+    cree_le = models.DateTimeField(auto_now_add=True)

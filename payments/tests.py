@@ -1,3 +1,4 @@
+from decimal import Decimal
 from rest_framework.test import APITestCase, APIClient
 from rest_framework import status
 from users.models import Client, Administrateur
@@ -18,18 +19,20 @@ class PaiementTests(APITestCase):
         self.administrateur.save()
 
         self.colis = Colis.objects.create(
-            client=self.client_user, code_suivi='FM-PAY0001', mode_transport='maritime'
+            client=self.client_user, code_suivi='FM-PAY0001', mode_transport='maritime',
+            cout_final=Decimal('35000.00'),
         )
 
     def test_client_peut_creer_un_paiement(self):
         api_client = APIClient()
         api_client.force_authenticate(user=self.client_user)
         response = api_client.post('/api/paiements/', {
-            'colis': self.colis.id, 'montant': '35000.00',
+            'colis': self.colis.id, 'telephone_paiement': '+237677000020',
             'methode': 'mtn_momo', 'moment': 'en_ligne',
         })
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertEqual(response.data['statut'], 'en_attente')
+        self.assertEqual(response.data['montant'], '35000.00')   # déduit du colis, jamais saisi
 
     def test_administrateur_peut_confirmer_un_paiement(self):
         paiement = Paiement.objects.create(
@@ -68,4 +71,4 @@ class PaiementTests(APITestCase):
         api_client = APIClient()
         api_client.force_authenticate(user=self.client_user)
         response = api_client.get('/api/paiements/')
-        self.assertEqual(len(response.data['results']), 1)
+        self.assertEqual(len(response.data['results']), 1)

@@ -45,3 +45,19 @@ class MessageReclamation(models.Model):
     class Meta:
         db_table = 'messages_reclamation'
         indexes = [models.Index(fields=['reclamation', 'cree_le'])]
+
+class PhotoReclamation(models.Model):
+    reclamation = models.ForeignKey(Reclamation, on_delete=models.CASCADE, related_name='photos')
+    url = models.ImageField(upload_to='reclamations/')
+    cree_le = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'photos_reclamation'
+
+class PhotoMessageReclamation(models.Model):
+    message = models.ForeignKey(MessageReclamation, on_delete=models.CASCADE, related_name='photos')
+    url = models.ImageField(upload_to='messages_reclamation/')
+    cree_le = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = 'photos_message_reclamation'

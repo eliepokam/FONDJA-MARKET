@@ -7,7 +7,7 @@ from users.models import Agent
 class HistoriqueStatutColis(models.Model):
     colis = models.ForeignKey(Colis, on_delete=models.CASCADE, related_name='historique_statuts')
     statut = models.CharField(max_length=20, choices=Colis.Statut.choices)
-    agent = models.ForeignKey(Agent, on_delete=models.RESTRICT, null=True, blank=True, related_name='changements_statuts_colis')
+    agent = models.ForeignKey('users.Agent', on_delete=models.SET_NULL, null=True, blank=True, related_name='photos_colis')
     note = models.CharField(max_length=255, null=True, blank=True)
     cree_le = models.DateTimeField(auto_now_add=True)
 

@@ -96,7 +96,7 @@ class PhotoColisTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
         self.assertTrue(PhotoColis.objects.filter(colis=self.colis).exists())
 
-    def test_client_ne_peut_pas_uploader_de_photo(self):
+    def test_client_peut_joindre_une_photo_a_son_propre_colis(self):
         api_client = APIClient()
         api_client.force_authenticate(user=self.client_user)
         response = api_client.post(
@@ -104,4 +104,15 @@ class PhotoColisTests(APITestCase):
             {'photo': generer_image_test()},
             format='multipart',
         )
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    def test_client_ne_peut_pas_uploader_de_photo_sur_le_colis_d_un_autre(self):
+        autre = Client.objects.create(nom='Autre', telephone='+237677000046', code_client='CL-TRK03')
+        api_client = APIClient()
+        api_client.force_authenticate(user=autre)
+        response = api_client.post(
+            f'/api/colis/{self.colis.code_suivi}/photos/',
+            {'photo': generer_image_test()},
+            format='multipart',
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)

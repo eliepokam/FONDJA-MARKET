@@ -12,7 +12,7 @@ class ConversationAssistant(models.Model):
         indexes = [models.Index(fields=['client'])]
 
 class MessageAssistant(models.Model):
-    class Emeteur(models.TextChoices):
+    class Emetteur(models.TextChoices):
         CLIENT = 'client', 'Client'
         ASSISTANT = 'assistant', 'Assistant'
 

@@ -14,11 +14,17 @@ Including another URLconf
     1. Import the include() function: from django.urls import include, path
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
+
 from django.contrib import admin
 from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
+from shipments.views import BulkAssignLotView
+from users.views import CreateStaffAccountView, UserListView, ToggleUserStatusView, DeleteUserView
+from core.views import AdminStatsView, ExportDataView
+from django.http import JsonResponse
+from core.views import JournalActiviteListView
 
 urlpatterns = [
     path('admin/', admin.site.urls),
@@ -30,4 +36,13 @@ urlpatterns = [
     path('api/', include('notifications.urls')),
     path('api/', include('payments.urls')),
     path('api/', include('complaints.urls')),
+    path('api/users/', UserListView.as_view()),
+    path('api/admin/users/<int:user_id>/statut/', ToggleUserStatusView.as_view()),
+    path('api/admin/users/<int:user_id>/', DeleteUserView.as_view()),
+    path('api/admin/staff-accounts/', CreateStaffAccountView.as_view()),
+    path('api/admin/stats/', AdminStatsView.as_view()),
+    path('api/admin/export/', ExportDataView.as_view()),
+    path('api/colis/bulk-assign-lot/', BulkAssignLotView.as_view()),
+    path('test-vivant/', lambda request: JsonResponse({'ok': True, 'moment': 'maintenant'})),
+    path('api/admin/journal/', JournalActiviteListView.as_view()),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

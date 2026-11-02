@@ -36,6 +36,8 @@ class Utilisateur(AbstractBaseUser, PermissionsMixin):
     jeton_connexion = models.CharField(max_length=100, null=True, blank=True)
     cree_le = models.DateTimeField(auto_now_add=True)
     modifie_le = models.DateTimeField(auto_now=True)
+    tentatives_connexion_echouees = models.PositiveSmallIntegerField(default=0)
+    bloque_jusqu_a = models.DateTimeField(null=True, blank=True)
     # is_superuser : SUPPRIME d'ici, fourni maintenant par PermissionsMixin
 
     USERNAME_FIELD = 'telephone'
@@ -88,7 +90,7 @@ class Agent(Utilisateur):
         primary_key=True, db_column='id_utilisateur', related_name='agent'
     )
     localisation = models.CharField(max_length=20, choices=Localisation.choices, default=Localisation.CHINE)
-    cree_par = models.ForeignKey(Administrateur, on_delete=models.RESTRICT, related_name='agents_crees')
+    cree_par = models.ForeignKey(Administrateur, on_delete=models.RESTRICT, null=True, blank=True, related_name='agents_crees')
     supprime_par = models.ForeignKey(
         Administrateur, on_delete=models.RESTRICT, null=True, blank=True, related_name='agents_supprimes'
     )

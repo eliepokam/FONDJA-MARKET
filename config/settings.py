@@ -32,6 +32,16 @@ DATABASES = {
     }
 }    
 
+FREEMOPAY_BASE_URL = env('FREEMOPAY_BASE_URL', default='')
+FREEMOPAY_APP_KEY = env('FREEMOPAY_APP_KEY', default='')
+FREEMOPAY_SECRET_KEY = env('FREEMOPAY_SECRET_KEY', default='')
+FREEMOPAY_CALLBACK_URL = env('FREEMOPAY_CALLBACK_URL', default='')
+
+PAYMENT_PROVIDER = env('PAYMENT_PROVIDER', default='freemopay')
+CAMPAY_BASE_URL = env('CAMPAY_BASE_URL', default='https://demo.campay.net')
+CAMPAY_APP_USERNAME = env('CAMPAY_APP_USERNAME', default='')
+CAMPAY_APP_PASSWORD = env('CAMPAY_APP_PASSWORD', default='')
+
 from pathlib import Path
 from datetime import timedelta
 
@@ -43,7 +53,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 
 ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=['127.0.0.1', 'localhost'])
-
+FIREBASE_CREDENTIALS_PATH = env('FIREBASE_CREDENTIALS_PATH')
 
 # Application definition
 
@@ -54,6 +64,7 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
+    'rest_framework_simplejwt.token_blacklist',
 
     #nos apps fondja-market
     'users',
@@ -72,7 +83,7 @@ INSTALLED_APPS = [
 
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
-        'rest_framework_simplejwt.authentication.JWTAuthentication',
+        'users.authentication.CookieJWTAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
@@ -121,6 +132,7 @@ CORS_ALLOWED_ORIGINS = env.list(
     'CORS_ALLOWED_ORIGINS',
     default=['http://localhost:3000', 'http://127.0.0.1:3000']
 )
+CORS_ALLOW_CREDENTIALS = True
 
 TEMPLATES = [
     {
@@ -175,6 +187,19 @@ USE_I18N = True
 
 USE_TZ = True
 
+CELERY_BROKER_URL = env('CELERY_BROKER_URL', default='redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = env('CELERY_RESULT_BACKEND', default='redis://localhost:6379/0')
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_TIMEZONE = TIME_ZONE
+
+TWILIO_ACCOUNT_SID = env('TWILIO_ACCOUNT_SID')
+TWILIO_AUTH_TOKEN = env('TWILIO_AUTH_TOKEN')
+TWILIO_WHATSAPP_FROM = env('TWILIO_WHATSAPP_FROM', default='+14155238886')
+
+DEVCODE_SMS_API_KEY = env('DEVCODE_SMS_API_KEY')
+DEVCODE_SMS_SENDER_ID = env('DEVCODE_SMS_SENDER_ID', default='FondjaMkt')
+
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/6.0/howto/static-files/
@@ -194,4 +219,8 @@ LOGGING = {
         'handlers': ['console'],
         'level': 'INFO',
     },
+    'loggers': {
+        'django': {'handlers': [],
+        'propagate': True}
+        },
 }
