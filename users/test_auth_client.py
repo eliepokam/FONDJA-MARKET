@@ -34,7 +34,7 @@ def connecter(api, tel, mot_de_passe=MOT_DE_PASSE, portail='client'):
 
 class InscriptionTests(SansLimiteDeDebit):
     def inscrire(self, **extra):
-        data = {'nom': 'Awa Test', 'telephone': '+237677100010', 'password': MOT_DE_PASSE}
+        data = {'nom': 'Awa Test', 'telephone': '+237677100010', 'password': MOT_DE_PASSE, 'accepte_conditions': True}
         data.update(extra)
         return self.client.post('/api/auth/register/', data, format='json')
 
@@ -86,7 +86,7 @@ class ConnexionEtVerificationTests(SansLimiteDeDebit):
         self.assertEqual(connecter(self.client, '+237677100023', portail='staff').status_code, 200)
 
     def test_inscription_puis_verification_puis_connexion(self):
-        self.client.post('/api/auth/register/', {'nom': 'Awa', 'telephone': '+237677100024', 'password': MOT_DE_PASSE}, format='json')
+        self.client.post('/api/auth/register/', {'accepte_conditions': True, 'nom': 'Awa', 'telephone': '+237677100024', 'password': MOT_DE_PASSE}, format='json')
         otp = CodeOtp.objects.get(utilisateur__telephone='+237677100024')
         self.assertEqual(connecter(self.client, '+237677100024').status_code, 403)
         r = self.client.post('/api/auth/otp/verify/', {'telephone': '+237677100024', 'code': otp.code}, format='json')

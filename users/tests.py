@@ -5,7 +5,7 @@ from .models import Client, CodeOtp
 
 class InscriptionOtpTests(APITestCase):
     def test_inscription_cree_un_client_et_un_otp(self):
-        response = self.client.post('/api/auth/register/', {
+        response = self.client.post('/api/auth/register/', {'accepte_conditions': True, 
             'nom': 'Jean Test',
             'telephone': '+237677000001',
             'email': 'jean@test.com',
@@ -16,7 +16,7 @@ class InscriptionOtpTests(APITestCase):
         self.assertTrue(CodeOtp.objects.filter(utilisateur__telephone='+237677000001').exists())
 
     def test_verification_otp_renvoie_des_tokens(self):
-        self.client.post('/api/auth/register/', {
+        self.client.post('/api/auth/register/', {'accepte_conditions': True, 
             'nom': 'Jean Test', 'telephone': '+237677000002',
             'email': 'jean2@test.com', 'password': 'MotDePasse123',
         })
@@ -32,7 +32,7 @@ class InscriptionOtpTests(APITestCase):
         self.assertNotIn('access', response.data)
 
     def test_mauvais_code_otp_incremente_les_tentatives(self):
-        self.client.post('/api/auth/register/', {
+        self.client.post('/api/auth/register/', {'accepte_conditions': True, 
             'nom': 'Jean Test', 'telephone': '+237677000003',
             'email': 'jean3@test.com', 'password': 'MotDePasse123',
         })

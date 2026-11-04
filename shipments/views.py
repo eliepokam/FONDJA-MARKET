@@ -1,9 +1,13 @@
 from rest_framework.response import Response
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
+from rest_framework import generics
+from rest_framework.permissions import AllowAny
+from django.utils.cache import patch_cache_control
+from django.db import transaction
 from django.db.models import Count
 from .models import Colis, LotDedouanement, Tarif, Incident
-from .serializers import ColisSerializer, ColisAgentSerializer, LotDedouanementSerializer, TarifSerializer, IncidentSerializer
+from .serializers import ColisSerializer, ColisAgentSerializer, LotDedouanementSerializer, TarifSerializer, IncidentSerializer, PublicTarifSerializer
 from .utils import generate_code_suivi
 from .status import TransitionInvalide, changer_statut
 from users.permissions import IsClient, IsAdministrateur, IsAgent
@@ -89,12 +93,19 @@ class LotDedouanementViewSet(viewsets.ModelViewSet):
     serializer_class = LotDedouanementSerializer
 
     def perform_create(self, serializer):
-        serializer.save(administrateur=self.request.user.administrateur)
+        lot = serializer.save(administrateur=self.request.user.administrateur)
+        log_action(self.request.user.administrateur, JournalActivite.Action.CREATION_LOT, lot.numero_besc)
+
+    def perform_destroy(self, instance):
+        description = f"{instance.numero_besc} ({instance.colis.count()} colis détachés)"
+        instance.delete()
+        log_action(self.request.user.administrateur, JournalActivite.Action.SUPPRESSION_LOT, description)
 
     def get_permissions(self):
         if self.request.method in permissions.SAFE_METHODS:   # GET, HEAD, OPTIONS
             return [(IsAdministrateur | IsAgent)()]
         return [IsAdministrateur()]
+
 
 class TarifViewSet(viewsets.ModelViewSet):
     serializer_class = TarifSerializer
@@ -103,10 +114,18 @@ class TarifViewSet(viewsets.ModelViewSet):
         user = self.request.user
         if hasattr(user, 'client'):
             return Tarif.objects.filter(actif=True)
-        return Tarif.objects.all()
+        return Tarif.objects.all().order_by('mode_transport', '-actif', '-cree_le')
+
+    @staticmethod
+    def _desactiver_les_autres(tarif):
+        """Un seul tarif ACTIF par mode de transport : activer celui-ci désactive les autres du même mode."""
+        if tarif.actif:
+            Tarif.objects.filter(mode_transport=tarif.mode_transport, actif=True).exclude(pk=tarif.pk).update(actif=False)
 
     def perform_create(self, serializer):
-        tarif = serializer.save(administrateur=self.request.user.administrateur)
+        with transaction.atomic():
+            tarif = serializer.save(administrateur=self.request.user.administrateur)
+            self._desactiver_les_autres(tarif)
         log_action(
             self.request.user.administrateur, JournalActivite.Action.CREATION_TARIF,
             tarif.get_mode_transport_display(),
@@ -115,14 +134,18 @@ class TarifViewSet(viewsets.ModelViewSet):
         )
 
     def perform_update(self, serializer):
-        ancien = self.get_object()
-        ancien_prix = str(ancien.prix_par_kg or ancien.prix_par_m3)
-        tarif = serializer.save()
-        nouveau_prix = str(tarif.prix_par_kg or tarif.prix_par_m3)
-        log_action(
-            self.request.user.administrateur, JournalActivite.Action.MODIFICATION_TARIF,
-            tarif.get_mode_transport_display(), ancien_prix=ancien_prix, nouveau_prix=nouveau_prix,
-        )
+        ancien = Tarif.objects.get(pk=serializer.instance.pk)
+        with transaction.atomic():
+            tarif = serializer.save()
+            self._desactiver_les_autres(tarif)
+        # On journalise ce qui a VRAIMENT changé (prix, délais, activation), pas seulement le prix.
+        changements = {}
+        for champ in ('prix_par_kg', 'prix_par_m3', 'delai_min_jours', 'delai_max_jours', 'actif'):
+            avant, apres = getattr(ancien, champ), getattr(tarif, champ)
+            if avant != apres:
+                changements[champ] = f"{avant} → {apres}"
+        log_action(self.request.user.administrateur, JournalActivite.Action.MODIFICATION_TARIF,
+                   tarif.get_mode_transport_display(), **changements)
 
     def perform_destroy(self, instance):
         description = instance.get_mode_transport_display()
@@ -133,6 +156,27 @@ class TarifViewSet(viewsets.ModelViewSet):
         if self.request.method in permissions.SAFE_METHODS:
             return [permissions.IsAuthenticated()]
         return [IsAdministrateur()]
+
+
+class PublicTarifListView(generics.ListAPIView):
+    """
+    Tarifs ACTIFS, lisibles sans compte : alimente la section « Tarifs » de la landing page.
+    Lecture seule, mise en cache 5 minutes, sans authentification ni limitation de débit (donnée publique, peu coûteuse).
+    """
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = []
+    pagination_class = None
+    filter_backends = []
+    serializer_class = PublicTarifSerializer
+
+    def get_queryset(self):
+        return Tarif.objects.filter(actif=True).order_by('mode_transport', '-cree_le')
+
+    def list(self, request, *args, **kwargs):
+        response = super().list(request, *args, **kwargs)
+        patch_cache_control(response, public=True, max_age=300)
+        return response
 
 
 class IncidentViewSet(viewsets.ModelViewSet):

@@ -71,6 +71,18 @@ class LotDedouanementSerializer(serializers.ModelSerializer):
         fields = '__all__'
         read_only_fields = ['administrateur', 'cree_le']
 
+    def validate_numero_besc(self, value):
+        # Deux lots portant le même numéro BESC se confondent en douane : refus, sans tenir compte de la casse ni des espaces.
+        numero = value.strip()
+        if not numero:
+            raise serializers.ValidationError("Le numéro BESC est obligatoire.")
+        doublons = LotDedouanement.objects.filter(numero_besc__iexact=numero)
+        if self.instance is not None:
+            doublons = doublons.exclude(pk=self.instance.pk)
+        if doublons.exists():
+            raise serializers.ValidationError("Un lot avec ce numéro BESC existe déjà.")
+        return numero
+
     def get_colis_count(self, obj):
         # `nb_colis` est calculé en une seule requête par la vue ; le repli garde le serializer utilisable ailleurs.
         return obj.nb_colis if hasattr(obj, 'nb_colis') else obj.colis.count()
@@ -82,12 +94,33 @@ class TarifSerializer(serializers.ModelSerializer):
         read_only_fields = ['administrateur', 'cree_le', 'modifie_le']
 
     def validate(self, data):
-        delai_min = data.get('delai_min_jours', getattr(self.instance, 'delai_min_jours', None))
-        delai_max = data.get('delai_max_jours', getattr(self.instance, 'delai_max_jours', None))
+        def valeur(champ):
+            return data[champ] if champ in data else getattr(self.instance, champ, None)
+
+        delai_min, delai_max = valeur('delai_min_jours'), valeur('delai_max_jours')
         if delai_min is not None and delai_max is not None and delai_min > delai_max:
             raise serializers.ValidationError("Le délai minimum ne peut pas dépasser le délai maximum.")
+
+        # Le prix doit correspondre au mode : au m³ pour le maritime, au kg pour l'aérien. Sans ce contrôle un tarif
+        # sans prix pouvait être créé, et le coût des colis ne se calculait alors plus (« tarif manquant »).
+        mode = valeur('mode_transport')
+        prix_kg, prix_m3 = valeur('prix_par_kg'), valeur('prix_par_m3')
+        if mode == 'maritime':
+            if not prix_m3 or prix_m3 <= 0:
+                raise serializers.ValidationError({'prix_par_m3': "Un tarif maritime doit avoir un prix au m³ supérieur à 0."})
+        elif not prix_kg or prix_kg <= 0:
+            raise serializers.ValidationError({'prix_par_kg': "Un tarif aérien doit avoir un prix au kg supérieur à 0."})
         return data
     
+class PublicTarifSerializer(serializers.ModelSerializer):
+    """Grille tarifaire exposée aux VISITEURS (landing page) : aucun identifiant interne, aucun administrateur, aucune date."""
+
+    class Meta:
+        model = Tarif
+        fields = ['mode_transport', 'prix_par_kg', 'prix_par_m3', 'delai_min_jours', 'delai_max_jours', 'devise']
+        read_only_fields = fields
+
+
 class IncidentSerializer(serializers.ModelSerializer):
     colis_count = serializers.SerializerMethodField()
     colis_code_suivi = serializers.CharField(source='colis.code_suivi', read_only=True, allow_null=True)

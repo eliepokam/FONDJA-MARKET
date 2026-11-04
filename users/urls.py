@@ -1,7 +1,8 @@
 from django.urls import path
 from .views import (
     ChangePasswordView, CreateStaffAccountView, DeleteUserView, ForgotPasswordRequestView, RegisterView, ResendOtpView, ResetPasswordView, StaffSelfRegisterView, ToggleUserStatusView, VerifyOtpView, MeView,
-    CookieTokenObtainPairView, CookieTokenRefreshView, LogoutView
+    CookieTokenObtainPairView, CookieTokenRefreshView, LogoutView,
+    DeleteMyAccountView, DeletionCodeRequestView, DeletionConfirmView, DeletionStatusView, ConsentView,
 )
 
 urlpatterns = [
@@ -16,4 +17,9 @@ urlpatterns = [
     path('reset-password/', ResetPasswordView.as_view()),
     path('otp/resend/', ResendOtpView.as_view()),
     path('staff-register/', StaffSelfRegisterView.as_view()),
-]
+    path('me/deletion-status/', DeletionStatusView.as_view()),
+    path('me/delete/', DeleteMyAccountView.as_view()),
+    path('me/consent/', ConsentView.as_view()),
+    path('delete-account/request-code/', DeletionCodeRequestView.as_view()),
+    path('delete-account/confirm/', DeletionConfirmView.as_view()),
+]

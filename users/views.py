@@ -12,11 +12,15 @@ from rest_framework import serializers
 
 from rest_framework_simplejwt.views import TokenObtainPairView
 from .models import Client, Utilisateur, CodeOtp, Agent, Administrateur
-from .serializers import RegisterSerializer, StaffAccountSerializer, StaffSelfRegisterSerializer, VerifyOtpSerializer, UtilisateurSerializer, ClientSerializer, AgentSerializer, AdministrateurSerializer, ClientListSerializer, ChangePasswordSerializer, ForgotPasswordRequestSerializer, ResetPasswordSerializer
+from .serializers import AgentListSerializer, RegisterSerializer, StaffAccountSerializer, StaffSelfRegisterSerializer, VerifyOtpSerializer, UtilisateurSerializer, ClientSerializer, AgentSerializer, AdministrateurSerializer, ClientListSerializer, ChangePasswordSerializer, ForgotPasswordRequestSerializer, ResetPasswordSerializer
 from .models import Utilisateur, CodeOtp, Administrateur, Agent, Client
 logger = logging.getLogger('django')
-from .permissions import IsAdministrateur
+from .permissions import IsAdministrateur, IsClient
+from .account_deletion import SuppressionImpossible, a_des_enregistrements_comptables, anonymiser_client, obstacles_suppression
+from rest_framework.throttling import UserRateThrottle
 from django.shortcuts import get_object_or_404
+from django.db.models import Count, Q
+from rest_framework.filters import SearchFilter
 from django.utils import timezone
 from django.db.models.deletion import RestrictedError
 from rest_framework.views import APIView
@@ -66,6 +70,12 @@ class CookieTokenObtainPairView(TokenObtainPairView):
             raise Throttled(detail=f"Trop de tentatives. Réessaie dans {minutes_restantes} min.")
 
         if utilisateur and utilisateur.statut == Utilisateur.Statut.DESACTIVE:
+            agent = getattr(utilisateur, 'agent', None)
+            if agent is not None and agent.cree_par_id is None and agent.supprime_le is None:
+                return Response(
+                    {'detail': "Ton inscription est en attente : un administrateur doit encore activer ton compte."},
+                    status=status.HTTP_403_FORBIDDEN,
+                )
             return Response(
                 {'detail': "Ce compte a été suspendu. Contacte le support Fondja Market pour plus d'informations."},
                 status=status.HTTP_403_FORBIDDEN,
@@ -245,21 +255,30 @@ class VerifyOtpView(APIView):
 
 class UserListView(generics.ListAPIView):
     permission_classes = [IsAdministrateur]
+    filter_backends = [SearchFilter]
+    search_fields = ['nom', 'telephone']      # ?search=… côté serveur : l'écran ne cherchait que parmi les 20 premiers comptes
 
     def get_serializer_class(self):
-        if self.request.query_params.get('role') == 'client':
+        role = self.request.query_params.get('role')
+        if role == 'client':
             return ClientListSerializer
+        if role == 'agent':
+            return AgentListSerializer
         return UtilisateurSerializer
 
     def get_queryset(self):
         role = self.request.query_params.get('role')
         if role == 'client':
-            return Client.objects.all().order_by('-cree_le')
+            return (Client.objects.filter(anonymise_le__isnull=True)
+                    .annotate(colis_actifs=Count('colis', filter=~Q(colis__statut='livre')))
+                    .order_by('-cree_le'))
         if role == 'agent':
-            return Agent.objects.all().order_by('-cree_le')
+            # Un agent « supprimé » (désactivation définitive) n'a plus sa place dans la liste de gestion.
+            return Agent.objects.filter(supprime_le__isnull=True).order_by('-cree_le')
         if role == 'administrateur':
             return Administrateur.objects.all().order_by('-cree_le')
         return Utilisateur.objects.none()
+
 
 class MeView(generics.RetrieveAPIView):
     def get_serializer_class(self):
@@ -299,6 +318,14 @@ class StaffSelfRegisterView(generics.CreateAPIView):
         for admin in Administrateur.objects.all():
             notify(admin, f"Nouvelle demande d'inscription agent : {agent.nom} ({agent.telephone}) — en attente d'activation.", Notification.Type.GENERAL)
 
+def _dernier_administrateur_actif(cible):
+    """Vrai si `cible` est le seul administrateur actif : le suspendre ou le supprimer enfermerait tout le monde dehors."""
+    if not hasattr(cible, 'administrateur'):
+        return False
+    autres = Administrateur.objects.filter(statut=Utilisateur.Statut.ACTIF).exclude(pk=cible.pk)
+    return not autres.exists()
+
+
 class ToggleUserStatusView(APIView):
     permission_classes = [IsAdministrateur]
 
@@ -308,17 +335,42 @@ class ToggleUserStatusView(APIView):
         if new_status not in (Utilisateur.Statut.ACTIF, Utilisateur.Statut.DESACTIVE):
             return Response({'detail': "Statut invalide."}, status=status.HTTP_400_BAD_REQUEST)
 
+        if new_status == Utilisateur.Statut.DESACTIVE:
+            if target.pk == request.user.pk:
+                return Response({'detail': "Tu ne peux pas suspendre ton propre compte."}, status=status.HTTP_400_BAD_REQUEST)
+            if _dernier_administrateur_actif(target):
+                return Response({'detail': "C'est le dernier administrateur actif : le suspendre bloquerait l'accès à l'administration."},
+                                status=status.HTTP_400_BAD_REQUEST)
+        if new_status == Utilisateur.Statut.ACTIF and target.anonymise_le is not None:
+            return Response({'detail': "Ce compte a été supprimé : il ne peut pas être réactivé."}, status=status.HTTP_400_BAD_REQUEST)
+        agent = getattr(target, 'agent', None)
+        if new_status == Utilisateur.Statut.ACTIF and agent is not None and agent.supprime_le is not None:
+            return Response({'detail': "Ce compte a été supprimé : il ne peut pas être réactivé."}, status=status.HTTP_400_BAD_REQUEST)
+
         ancien_statut = target.statut
+        champs = ['statut']
+        demande_inscription = False
+        if new_status == Utilisateur.Statut.ACTIF and agent is not None and agent.cree_par_id is None:
+            # Activation d'une demande d'inscription : l'administrateur qui l'accepte en devient le « créateur » (traçabilité).
+            agent.cree_par = request.user.administrateur
+            demande_inscription = True
         target.statut = new_status
-        target.save(update_fields=['statut'])
+        target.save(update_fields=champs)
+        if demande_inscription:
+            agent.save(update_fields=['cree_par'])
 
         action = JournalActivite.Action.SUSPENSION_COMPTE if new_status == Utilisateur.Statut.DESACTIVE else JournalActivite.Action.REACTIVATION_COMPTE
-        log_action(request.user.administrateur, action, f"{target.nom} ({target.telephone})", ancien_statut=ancien_statut, nouveau_statut=new_status)
+        details = {'ancien_statut': ancien_statut, 'nouveau_statut': new_status}
+        if demande_inscription:
+            details['demande_inscription'] = 'acceptée'
+        log_action(request.user.administrateur, action, f"{target.nom} ({target.telephone})", **details)
 
+        if new_status == Utilisateur.Statut.DESACTIVE:
+            blacklist_all_tokens(target)     # coupe aussi les sessions de rafraîchissement déjà ouvertes
         message = (
-            "Votre compte a été réactivé."
-            if new_status == Utilisateur.Statut.ACTIF
-            else "Votre compte a été suspendu. Contactez le support pour plus d'informations."
+            "Votre compte a été activé." if demande_inscription else
+            "Votre compte a été réactivé." if new_status == Utilisateur.Statut.ACTIF else
+            "Votre compte a été suspendu. Contactez le support pour plus d'informations."
         )
         notify(target, message, Notification.Type.GENERAL)
 
@@ -332,20 +384,39 @@ class DeleteUserView(APIView):
         target = get_object_or_404(Utilisateur, pk=user_id)
         description = f"{target.nom} ({target.telephone})"
 
+        if target.pk == request.user.pk:
+            return Response({'detail': "Tu ne peux pas supprimer ton propre compte."}, status=status.HTTP_400_BAD_REQUEST)
+        if _dernier_administrateur_actif(target):
+            return Response({'detail': "C'est le dernier administrateur actif : le supprimer bloquerait l'accès à l'administration."},
+                            status=status.HTTP_400_BAD_REQUEST)
+
         if hasattr(target, 'agent'):
             agent = target.agent
             agent.statut = Utilisateur.Statut.DESACTIVE
             agent.supprime_par = request.user.administrateur
             agent.supprime_le = timezone.now()
             agent.save(update_fields=['statut', 'supprime_par', 'supprime_le'])
+            blacklist_all_tokens(agent)
             log_action(request.user.administrateur, JournalActivite.Action.SUPPRESSION_COMPTE, description, type='agent_desactive')
             return Response({'detail': 'Agent désactivé.'})
+
+        if hasattr(target, 'client'):
+            client = target.client
+            # Le journal garde la trace de l'action SANS identifier la personne effacée.
+            description = f"Client #{client.pk}"
+            if a_des_enregistrements_comptables(client):
+                try:
+                    anonymiser_client(client)
+                except SuppressionImpossible as exc:
+                    return Response({'detail': str(exc), 'obstacles': exc.obstacles}, status=status.HTTP_400_BAD_REQUEST)
+                log_action(request.user.administrateur, JournalActivite.Action.SUPPRESSION_COMPTE, description, type='client_anonymise')
+                return Response({'detail': "Compte anonymisé : les données personnelles sont effacées, les colis et paiements sont conservés."})
 
         try:
             target.delete()
         except RestrictedError:
             return Response(
-                {'detail': "Ce compte a des colis ou des données associées — impossible à supprimer. Désactivez-le plutôt."},
+                {'detail': "Ce compte a des données associées — impossible à supprimer. Désactivez-le plutôt."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
         log_action(request.user.administrateur, JournalActivite.Action.SUPPRESSION_COMPTE, description)
@@ -429,4 +500,109 @@ class ResetPasswordView(APIView):
             utilisateur.telephone_verifie_le = timezone.now()   # le code reçu par SMS prouve que le numéro est le sien
         utilisateur.save()
         blacklist_all_tokens(utilisateur) 
-        return Response({'detail': 'Mot de passe réinitialisé avec succès.'})
+        return Response({'detail': 'Mot de passe réinitialisé avec succès.'})
+
+
+class SuppressionThrottle(UserRateThrottle):
+    scope = 'suppression'
+    rate = '5/hour'
+
+
+def _session_fermee(detail):
+    response = Response({'detail': detail})
+    response.delete_cookie("access_token")
+    response.delete_cookie("refresh_token")
+    return response
+
+
+class DeletionStatusView(APIView):
+    """Le client peut-il supprimer son compte maintenant ? Sinon, pourquoi (colis en cours, paiement en attente, impayé) ?"""
+    permission_classes = [IsClient]
+
+    def get(self, request):
+        obstacles = obstacles_suppression(request.user.client)
+        return Response({'possible': not obstacles, 'obstacles': obstacles})
+
+
+class DeleteMyAccountView(APIView):
+    """Suppression depuis l'application : le mot de passe est redemandé (une session volée ne doit pas suffire à tout effacer)."""
+    permission_classes = [IsClient]
+    throttle_classes = [SuppressionThrottle]
+
+    def post(self, request):
+        client = request.user.client
+        if not client.check_password(request.data.get('password', '')):
+            return Response({'detail': "Mot de passe incorrect.", 'code': 'bad_password'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            anonymiser_client(client)
+        except SuppressionImpossible as exc:
+            return Response({'detail': str(exc), 'code': 'suppression_impossible', 'obstacles': exc.obstacles}, status=status.HTTP_409_CONFLICT)
+        return _session_fermee("Votre compte a été supprimé.")
+
+
+class DeletionCodeRequestView(APIView):
+    """Voie web (sans l'application) : envoie un code de confirmation au numéro du compte. Réponse identique que le compte existe ou non."""
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        serializer = ForgotPasswordRequestSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        telephone = serializer.validated_data['telephone']
+        canal = request.data.get('canal', CodeOtp.Canal.SMS)
+        if canal not in CodeOtp.Canal.values:
+            canal = CodeOtp.Canal.SMS
+
+        reponse = Response({'detail': "Si un compte existe pour ce numéro, un code de confirmation vient d'être envoyé."})
+        utilisateur = Utilisateur.objects.filter(telephone=telephone).first()
+        # Seuls les comptes CLIENT encore actifs sont concernés : le personnel est géré par un administrateur.
+        if utilisateur is None or not hasattr(utilisateur, 'client') or utilisateur.anonymise_le is not None:
+            return reponse
+
+        check_otp_cooldown(utilisateur)
+        code = f"{random.randint(0, 999999):06d}"
+        CodeOtp.objects.create(utilisateur=utilisateur, code=code, canal=canal, expire_le=timezone.now() + timedelta(minutes=5))
+        envoyer_otp_task.delay(str(utilisateur.telephone), code, canal)
+        return reponse
+
+
+class DeletionConfirmView(APIView):
+    """Voie web : le code reçu par SMS/WhatsApp prouve que la personne possède le numéro ; le compte est alors supprimé."""
+    permission_classes = [AllowAny]
+    MAX_TENTATIVES = 5
+
+    def post(self, request):
+        serializer = VerifyOtpSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+        telephone = serializer.validated_data['telephone']
+        code = serializer.validated_data['code']
+
+        invalide = Response({'detail': 'Code invalide ou expiré.'}, status=status.HTTP_400_BAD_REQUEST)
+        utilisateur = Utilisateur.objects.filter(telephone=telephone).first()
+        if utilisateur is None or not hasattr(utilisateur, 'client') or utilisateur.anonymise_le is not None:
+            return invalide
+
+        otp = CodeOtp.objects.filter(utilisateur=utilisateur, verifie_le__isnull=True).order_by('-cree_le').first()
+        if not otp or otp.expire_le < timezone.now():
+            return invalide
+        if otp.tentatives >= self.MAX_TENTATIVES:
+            return Response({'detail': 'Trop de tentatives. Redemandez un code.'}, status=status.HTTP_429_TOO_MANY_REQUESTS)
+        if otp.code != code:
+            otp.tentatives += 1
+            otp.save(update_fields=['tentatives'])
+            return Response({'detail': 'Code incorrect.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            anonymiser_client(utilisateur.client)      # le code n'est « consommé » que si la suppression a réellement lieu
+        except SuppressionImpossible as exc:
+            return Response({'detail': str(exc), 'code': 'suppression_impossible', 'obstacles': exc.obstacles}, status=status.HTTP_409_CONFLICT)
+        return _session_fermee("Votre compte a été supprimé.")
+
+
+class ConsentView(APIView):
+    """Un client enregistre son acceptation de la version actuelle des conditions (comptes créés avant l'obligation, ou textes mis à jour)."""
+    permission_classes = [IsClient]
+
+    def post(self, request):
+        client = request.user.client
+        client.enregistrer_consentement()
+        return Response({'consentement_a_jour': True})

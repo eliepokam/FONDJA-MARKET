@@ -10,19 +10,33 @@ from phonenumber_field.serializerfields import PhoneNumberField as PhoneNumberSe
 
 class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, min_length=8)
+    # Consentement explicite : sans lui, pas de compte (loi n° 2024/017). La date et la version acceptée sont conservées.
+    accepte_conditions = serializers.BooleanField(
+        write_only=True,
+        error_messages={'required': "Vous devez accepter les conditions d'utilisation et la politique de confidentialité.",
+                        'invalid': "Valeur invalide."},
+    )
 
     class Meta:
         model = Client
-        fields = ['nom', 'telephone', 'email', 'password']
+        fields = ['nom', 'telephone', 'email', 'password', 'accepte_conditions']
         extra_kwargs = {'email': {'required': False, 'allow_blank': True}}
 
     def validate_password(self, value):
         validate_password(value)   # refuse les mots de passe triviaux (12345678, password...)
         return value
 
+    def validate_accepte_conditions(self, value):
+        if value is not True:
+            raise serializers.ValidationError("Vous devez accepter les conditions d'utilisation et la politique de confidentialité pour créer un compte.")
+        return value
+
     def create(self, validated_data):
+        from django.utils import timezone
+        from .consent import version_courante
         password = validated_data.pop('password')
-        client = Client(**validated_data)
+        validated_data.pop('accepte_conditions')
+        client = Client(**validated_data, consentement_le=timezone.now(), consentement_version=version_courante())
         client.set_password(password)
         # Une seule transaction : le code client (déduit de l'identifiant) est posé avant que
         # quiconque d'autre ne puisse voir la ligne, donc deux inscriptions simultanées ne se heurtent
@@ -46,10 +60,11 @@ class UtilisateurSerializer(serializers.ModelSerializer):
 
 class ClientSerializer(UtilisateurSerializer):
     role = serializers.SerializerMethodField()
+    consentement_a_jour = serializers.BooleanField(read_only=True)
 
     class Meta(UtilisateurSerializer.Meta):
         model = Client
-        fields = UtilisateurSerializer.Meta.fields + ['code_client', 'role']
+        fields = UtilisateurSerializer.Meta.fields + ['code_client', 'role', 'consentement_a_jour']
 
     def get_role(self, obj):
         return 'client'
@@ -62,7 +77,22 @@ class ClientListSerializer(serializers.ModelSerializer):
         fields = ['id', 'nom', 'telephone', 'statut', 'cree_le', 'colis_actifs_count']
 
     def get_colis_actifs_count(self, obj):
-        return obj.colis.exclude(statut='livre').count()
+        # Valeur calculée en une seule requête par la vue (annotation) ; le repli garde le serializer autonome.
+        return obj.colis_actifs if hasattr(obj, 'colis_actifs') else obj.colis.exclude(statut='livre').count()
+
+
+class AgentListSerializer(UtilisateurSerializer):
+    """Liste des agents pour l'administrateur, avec l'entrepôt et le drapeau « demande d'inscription en attente »."""
+    en_attente = serializers.SerializerMethodField()
+
+    class Meta(UtilisateurSerializer.Meta):
+        model = Agent
+        fields = UtilisateurSerializer.Meta.fields + ['localisation', 'en_attente']
+        read_only_fields = fields
+
+    def get_en_attente(self, obj):
+        # Un agent qui s'est inscrit lui-même (aucun administrateur créateur) et qu'on n'a pas encore activé.
+        return obj.statut == Utilisateur.Statut.DESACTIVE and obj.cree_par_id is None and obj.supprime_le is None
     
 class AgentSerializer(UtilisateurSerializer):
     role = serializers.SerializerMethodField()
@@ -101,6 +131,10 @@ class StaffSelfRegisterSerializer(serializers.Serializer):
     localisation = serializers.ChoiceField(choices=["chine", "cameroun"])
     password = serializers.CharField(write_only=True, min_length=8)
 
+    def validate_password(self, value):
+        validate_password(value)
+        return value
+
     def create(self, validated_data):
         password = validated_data.pop('password')
         agent = Agent(**validated_data, cree_par=None, statut=Utilisateur.Statut.DESACTIVE)
@@ -119,7 +153,11 @@ class StaffAccountSerializer(serializers.Serializer):
     nom = serializers.CharField()
     telephone = PhoneNumberSerializerField()   # ← remplace CharField, valide le vrai format
     localisation = serializers.ChoiceField(choices=["chine", "cameroun"], required=False)
-    password = serializers.CharField(write_only=True)
+    password = serializers.CharField(write_only=True, min_length=8)
+
+    def validate_password(self, value):
+        validate_password(value)   # le mot de passe temporaire d'un compte du personnel doit être aussi solide que les autres
+        return value
 
     def validate(self, data):
         if data['role'] == 'agent' and not data.get('localisation'):

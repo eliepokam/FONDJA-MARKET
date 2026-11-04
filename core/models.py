@@ -9,6 +9,10 @@ class JournalActivite(models.Model):
         MODIFICATION_TARIF = 'modification_tarif', 'Modification de tarif'
         CREATION_TARIF = 'creation_tarif', 'Création de tarif'
         SUPPRESSION_TARIF = 'suppression_tarif', 'Suppression de tarif'
+        CREATION_LOT = 'creation_lot', 'Création de lot'
+        SUPPRESSION_LOT = 'suppression_lot', 'Suppression de lot'
+        EXPORT_DONNEES = 'export_donnees', 'Export de données'
+        PURGE_DONNEES = 'purge_donnees', 'Purge automatique des données'
 
     auteur = models.ForeignKey('users.Administrateur', on_delete=models.SET_NULL, null=True, related_name='actions_journal')
     action = models.CharField(max_length=30, choices=Action.choices)
@@ -18,4 +22,4 @@ class JournalActivite(models.Model):
 
     class Meta:
         db_table = 'journal_activite'
-        ordering = ['-cree_le']
+        ordering = ['-cree_le']

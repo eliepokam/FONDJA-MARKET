@@ -38,6 +38,9 @@ class Utilisateur(AbstractBaseUser, PermissionsMixin):
     modifie_le = models.DateTimeField(auto_now=True)
     tentatives_connexion_echouees = models.PositiveSmallIntegerField(default=0)
     bloque_jusqu_a = models.DateTimeField(null=True, blank=True)
+    # Renseigné quand le compte a été supprimé à la demande de la personne : ses données d'identification ont été effacées,
+    # seuls les enregistrements comptables (colis, paiements) subsistent, rattachés à ce compte anonyme.
+    anonymise_le = models.DateTimeField(null=True, blank=True)
     # is_superuser : SUPPRIME d'ici, fourni maintenant par PermissionsMixin
 
     USERNAME_FIELD = 'telephone'
@@ -64,7 +67,23 @@ class Client(Utilisateur):
         Utilisateur, on_delete=models.CASCADE, parent_link=True,
         primary_key=True, db_column='id_utilisateur', related_name='client'
     )
+    # Preuve du consentement : date et version des textes acceptés (voir users/consent.py). Nul = jamais accepté (comptes créés avant cette fonction).
+    consentement_le = models.DateTimeField(null=True, blank=True)
+    consentement_version = models.CharField(max_length=20, blank=True, default='')
     code_client = models.CharField(max_length=20, unique=True)
+
+    @property
+    def consentement_a_jour(self):
+        """Vrai si le client a accepté la version ACTUELLE des conditions et de la politique de confidentialité."""
+        from .consent import version_courante
+        return self.consentement_le is not None and self.consentement_version == version_courante()
+
+    def enregistrer_consentement(self):
+        from django.utils import timezone
+        from .consent import version_courante
+        self.consentement_le = timezone.now()
+        self.consentement_version = version_courante()
+        self.save(update_fields=['consentement_le', 'consentement_version'])
 
     class Meta:
         db_table = 'clients'

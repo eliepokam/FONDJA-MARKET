@@ -20,10 +20,8 @@ from django.urls import path, include
 from django.conf import settings
 from django.conf.urls.static import static
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
-from shipments.views import BulkAssignLotView
 from users.views import CreateStaffAccountView, UserListView, ToggleUserStatusView, DeleteUserView
 from core.views import AdminStatsView, ExportDataView
-from django.http import JsonResponse
 from core.views import JournalActiviteListView
 
 urlpatterns = [
@@ -42,7 +40,5 @@ urlpatterns = [
     path('api/admin/staff-accounts/', CreateStaffAccountView.as_view()),
     path('api/admin/stats/', AdminStatsView.as_view()),
     path('api/admin/export/', ExportDataView.as_view()),
-    path('api/colis/bulk-assign-lot/', BulkAssignLotView.as_view()),
-    path('test-vivant/', lambda request: JsonResponse({'ok': True, 'moment': 'maintenant'})),
     path('api/admin/journal/', JournalActiviteListView.as_view()),
 ] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
