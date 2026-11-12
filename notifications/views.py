@@ -54,3 +54,32 @@ class MarkNotificationReadView(APIView):
 
     def post(self, request, pk):
         return self._marquer(request, pk)
+
+
+class TestPushView(APIView):
+    """
+    « Tester mes notifications » : envoie TOUT DE SUITE une notification push à tous les appareils de l'utilisateur connecté et dit pourquoi
+    elle n'arrive pas, le cas échéant (aucun appareil enregistré, Firebase non configuré, jeton d'un autre projet…).
+    """
+    from rest_framework.throttling import UserRateThrottle as _Throttle
+
+    class LimiteTest(_Throttle):
+        scope = 'test_push'
+        rate = '20/hour'
+
+    throttle_classes = [LimiteTest]
+
+    def post(self, request):
+        from .services import firebase_pret, send_push_notification
+        if not firebase_pret():
+            return Response({'detail': "Les notifications push ne sont pas configurées sur le serveur "
+                                       "(fichier d'identifiants Firebase absent ou invalide : voir FIREBASE_CREDENTIALS_PATH)."}, status=503)
+        resume = send_push_notification(request.user, "Test de notification", "Si vous lisez ce message, les notifications fonctionnent.", "/notifications")
+        if resume['tokens'] == 0:
+            resume['detail'] = ("Aucun appareil n'est enregistré pour votre compte. Activez les notifications depuis ce navigateur "
+                                "(autorisation puis bouton « Activer »), puis réessayez.")
+        elif resume['envoyes'] == 0:
+            resume['detail'] = "Firebase a refusé l'envoi : " + "; ".join(e['raison'] for e in resume['erreurs'])
+        else:
+            resume['detail'] = f"Notification envoyée à {resume['envoyes']} appareil(s). Si rien n'apparaît, vérifiez l'autorisation du navigateur."
+        return Response(resume)

@@ -1,4 +1,5 @@
 from django.shortcuts import get_object_or_404
+from django.db.models import Prefetch
 from rest_framework import viewsets, generics, permissions
 
 from .models import Reclamation, PhotoReclamation, PhotoMessageReclamation, MessageReclamation
@@ -16,9 +17,11 @@ class ReclamationViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         user = self.request.user
-        if hasattr(user, 'client'):
-            return Reclamation.objects.filter(client=user.client)
-        return Reclamation.objects.all()
+        base = Reclamation.objects.filter(client=user.client) if hasattr(user, 'client') else Reclamation.objects.all()
+        # Le rôle de chaque expéditeur est lu en une seule requête, quel que soit le nombre de messages de la discussion.
+        messages = MessageReclamation.objects.select_related('expediteur__administrateur', 'expediteur__agent', 'expediteur__client')\
+            .order_by('cree_le', 'id')   # fil de discussion dans l'ordre d'envoi (sans tri, la base renvoyait un ordre quelconque)
+        return base.select_related('colis__client').prefetch_related(Prefetch('messages', queryset=messages.prefetch_related('photos')), 'photos')
 
     def perform_create(self, serializer):
         reclamation = serializer.save(client=self.request.user.client)
@@ -26,6 +29,7 @@ class ReclamationViewSet(viewsets.ModelViewSet):
             f"Nouvelle réclamation de {reclamation.client.nom} : {reclamation.get_type_display()}",
             Notification.Type.RECLAMATION,
             colis=reclamation.colis,
+            reclamation=reclamation,
         )
 
     def get_serializer_class(self):
@@ -49,7 +53,7 @@ class ReclamationViewSet(viewsets.ModelViewSet):
             Reclamation.Statut.OUVERTE: "Votre réclamation a été rouverte.",
         }
         notify(reclamation.client, f"Réclamation #{reclamation.pk} : {messages[reclamation.statut]}",
-               Notification.Type.RECLAMATION, colis=reclamation.colis)
+               Notification.Type.RECLAMATION, colis=reclamation.colis, reclamation=reclamation)
 
     def get_permissions(self):
         if self.action == 'create':
@@ -86,11 +90,11 @@ class MessageReclamationCreateView(generics.CreateAPIView):
 
         if hasattr(sender, 'client'):
             if reclamation.agent_assigne:
-                notify(reclamation.agent_assigne, f"Nouveau message sur la réclamation #{reclamation.pk}", Notification.Type.RECLAMATION, colis=reclamation.colis)
+                notify(reclamation.agent_assigne, f"Nouveau message sur la réclamation #{reclamation.pk}", Notification.Type.RECLAMATION, colis=reclamation.colis, reclamation=reclamation)
             else:
-                notify_staff(f"Nouveau message sur la réclamation #{reclamation.pk}", Notification.Type.RECLAMATION, colis=reclamation.colis)
+                notify_staff(f"Nouveau message sur la réclamation #{reclamation.pk}", Notification.Type.RECLAMATION, colis=reclamation.colis, reclamation=reclamation)
         else:
-            notify(reclamation.client, "Le support a répondu à votre réclamation", Notification.Type.RECLAMATION, colis=reclamation.colis)
+            notify(reclamation.client, "Le support a répondu à votre réclamation", Notification.Type.RECLAMATION, colis=reclamation.colis, reclamation=reclamation)
             
 class PhotoReclamationCreateView(generics.ListCreateAPIView):
     serializer_class = PhotoReclamationSerializer
@@ -118,4 +122,4 @@ class PhotoReclamationCreateView(generics.ListCreateAPIView):
         if not (is_staff or is_owner):
             raise PermissionDenied("Vous n'avez pas le droit d'ajouter une photo à cette réclamation.")
 
-        serializer.save(reclamation=reclamation)
+        serializer.save(reclamation=reclamation)

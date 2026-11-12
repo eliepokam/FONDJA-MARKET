@@ -2,7 +2,7 @@ from django.urls import path
 from .views import (
     ChangePasswordView, CreateStaffAccountView, DeleteUserView, ForgotPasswordRequestView, RegisterView, ResendOtpView, ResetPasswordView, StaffSelfRegisterView, ToggleUserStatusView, VerifyOtpView, MeView,
     CookieTokenObtainPairView, CookieTokenRefreshView, LogoutView,
-    DeleteMyAccountView, DeletionCodeRequestView, DeletionConfirmView, DeletionStatusView, ConsentView,
+    DeleteMyAccountView, DeletionCodeRequestView, DeletionConfirmView, DeletionStatusView, ConsentView, OtpConfigView,
 )
 
 urlpatterns = [
@@ -20,6 +20,7 @@ urlpatterns = [
     path('me/deletion-status/', DeletionStatusView.as_view()),
     path('me/delete/', DeleteMyAccountView.as_view()),
     path('me/consent/', ConsentView.as_view()),
+    path('otp-config/', OtpConfigView.as_view()),
     path('delete-account/request-code/', DeletionCodeRequestView.as_view()),
     path('delete-account/confirm/', DeletionConfirmView.as_view()),
 ]

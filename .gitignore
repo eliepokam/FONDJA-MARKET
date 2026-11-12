@@ -218,3 +218,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Preuves de virement des clients (donnees personnelles et bancaires) : jamais dans Git
+media_prive/

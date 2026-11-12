@@ -11,7 +11,8 @@ from rest_framework.views import APIView
 
 from complaints.models import Reclamation
 from payments.models import Paiement
-from shipments.models import Colis
+from shipments.conteneurs import etat as etat_conteneur, evolution as evolution_conteneur, variation as variation_conteneur
+from shipments.models import Colis, LotDedouanement
 from tracking.models import HistoriqueStatutColis
 from users.permissions import IsAdministrateur, IsAgent
 from .models import JournalActivite
@@ -65,10 +66,29 @@ class AdminStatsView(APIView):
             statut__in=[Colis.Statut.DECLAREE, Colis.Statut.RECU_ENTREPOT],
         ).aggregate(total=Sum(Coalesce('volume_m3', 'volume_declare_m3')))['total'] or 0
 
-        return Response({
+        conteneurs = []
+        ouverts = LotDedouanement.objects.filter(statut=LotDedouanement.Statut.OUVERT).order_by('cree_le')
+        for lot in ouverts:
+            etat_lot = etat_conteneur(lot)
+            livres = lot.colis.filter(statut=Colis.Statut.LIVRE).count()
+            conteneurs.append({
+                'statut': lot.statut, 'cree_le': lot.cree_le, 'cloture_le': None,
+                'surcharge': etat_lot['pourcentage'] > 100,
+                # Rempli ET livré : le bouton « Clôturer » devient vert, sans confirmation supplémentaire.
+                'pret_a_cloturer': etat_lot['nb_colis'] > 0 and livres == etat_lot['nb_colis'],
+                'id': lot.id, 'numero_besc': lot.numero_besc, 'type_conteneur': lot.type_conteneur, 'type_conteneur_libelle': lot.get_type_conteneur_display(),
+                'capacite_m3': float(lot.capacite_m3), 'volume_m3': float(etat_lot['volume_m3']), 'pourcentage': float(etat_lot['pourcentage']),
+                'nb_colis': etat_lot['nb_colis'], 'colis_livres': livres,
+                'colis_sans_volume': lot.colis.filter(volume_m3__isnull=True, volume_declare_m3__isnull=True).count(),
+                'variation_7j': float(variation_conteneur(lot)),
+                'evolution': [{'date': p['date'], 'pourcentage': float(p['pourcentage'])} for p in evolution_conteneur(lot, 14)],
+            })
+
+        donnees = {
             'colis_en_cours': colis_en_cours,
             'colis_en_retard': colis_en_retard,
             'ca_du_mois': float(ca_du_mois),
+            'virements_a_verifier': Paiement.objects.filter(methode='virement', statut='en_attente', preuve__isnull=False).exclude(preuve='').count(),
             'reclamations_ouvertes': reclamations_ouvertes,
             'stock_chine': stock_chine,
             'stock_douala': stock_douala,
@@ -76,8 +96,13 @@ class AdminStatsView(APIView):
             'sorties_aujourdhui': sorties_aujourdhui,
             'colis_par_etape': colis_par_etape,
             'cbm_en_attente': float(cbm_en_attente),
-            'cbm_capacite': 33,
-        })
+            'cbm_capacite': float(ouverts[0].capacite_m3) if ouverts else 33,
+            'conteneurs': conteneurs,
+        }
+        # Le chiffre d'affaires est réservé à l'administrateur : un agent n'a pas à le lire (même en appelant l'API directement).
+        if not hasattr(request.user, 'administrateur'):
+            donnees.pop('ca_du_mois')
+        return Response(donnees)
 
 
 TYPES_EXPORT = {'colis', 'paiements', 'reclamations'}

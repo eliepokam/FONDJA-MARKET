@@ -23,6 +23,8 @@ class Notification(models.Model):
     type = models.CharField(max_length=20, choices=Type.choices)
     canal = models.CharField(max_length=10, choices=Canal.choices)
     contenu = models.CharField(max_length=255)
+    # Page ouverte au clic, dans l'espace du destinataire (client, agent ou administrateur).
+    lien = models.CharField(max_length=255, blank=True, default='')
     envoye_le = models.DateTimeField(null=True, blank=True)
     lu_le = models.DateTimeField(null=True, blank=True)
     cree_le = models.DateTimeField(auto_now_add=True)

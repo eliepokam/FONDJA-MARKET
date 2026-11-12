@@ -66,15 +66,16 @@ class EnvoiPushTests(TestCase):
         self.colis = Colis.objects.create(client=self.alice, code_suivi='FM-NT000001', mode_transport='maritime')
 
     def test_notify_cree_la_notification_et_programme_le_push_apres_validation(self):
-        with patch('notifications.tasks.envoyer_push_task.delay') as delay:
+        with patch('notifications.tasks.envoyer_push_task.apply') as execution:
             with self.captureOnCommitCallbacks(execute=True):
                 n = notify(self.alice, "Votre colis est arrivé", Notification.Type.STATUT_COLIS, colis=self.colis)
         self.assertTrue(Notification.objects.filter(pk=n.pk).exists())
-        delay.assert_called_once_with(self.alice.pk, "Mise à jour de votre colis", "Votre colis est arrivé",
-                                      f"/shipments/{self.colis.pk}")
+        self.assertEqual(n.lien, f"/shipments/{self.colis.pk}")
+        execution.assert_called_once_with(args=(self.alice.pk, "Mise à jour de votre colis", "Votre colis est arrivé",
+                                                f"/shipments/{self.colis.pk}"), throw=False)
 
     def test_une_panne_du_broker_ne_fait_pas_echouer_l_action_metier(self):
-        with patch('notifications.tasks.envoyer_push_task.delay', side_effect=ConnectionError('redis down')):
+        with patch('core.taches.lancer_tache', side_effect=ConnectionError('redis down')):
             with self.captureOnCommitCallbacks(execute=True):
                 n = notify(self.alice, "Message", Notification.Type.GENERAL)      # ne lève rien
         self.assertTrue(Notification.objects.filter(pk=n.pk).exists())

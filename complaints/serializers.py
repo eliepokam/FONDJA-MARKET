@@ -12,7 +12,17 @@ class PhotoMessageReclamationSerializer(serializers.ModelSerializer):
 
 class MessageReclamationSerializer(serializers.ModelSerializer):
     sender_name = serializers.CharField(source='expediteur.nom', read_only=True)
+    # « client », « agent » ou « administrateur » : l'écran s'en sert pour placer le message du bon côté de la discussion
+    sender_role = serializers.SerializerMethodField()
     photos = PhotoMessageReclamationSerializer(many=True, read_only=True)
+
+    def get_sender_role(self, obj):
+        expediteur = obj.expediteur
+        if hasattr(expediteur, 'administrateur'):
+            return 'administrateur'
+        if hasattr(expediteur, 'agent'):
+            return 'agent'
+        return 'client'
 
     class Meta:
         model = MessageReclamation

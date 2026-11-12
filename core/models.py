@@ -9,10 +9,17 @@ class JournalActivite(models.Model):
         MODIFICATION_TARIF = 'modification_tarif', 'Modification de tarif'
         CREATION_TARIF = 'creation_tarif', 'Création de tarif'
         SUPPRESSION_TARIF = 'suppression_tarif', 'Suppression de tarif'
-        CREATION_LOT = 'creation_lot', 'Création de lot'
-        SUPPRESSION_LOT = 'suppression_lot', 'Suppression de lot'
+        CREATION_LOT = 'creation_lot', 'Création de conteneur'
+        SUPPRESSION_LOT = 'suppression_lot', 'Suppression de conteneur'
+        MODIFICATION_LOT = 'modification_lot', 'Modification de conteneur'
+        CLOTURE_LOT = 'cloture_lot', 'Clôture de conteneur'
+        REOUVERTURE_LOT = 'reouverture_lot', 'Réouverture de conteneur'
         EXPORT_DONNEES = 'export_donnees', 'Export de données'
         PURGE_DONNEES = 'purge_donnees', 'Purge automatique des données'
+        MODIFICATION_ADRESSE_TRANSIT = 'modification_adresse_transit', 'Modification d\'une adresse de transit'
+        VALIDATION_VIREMENT = 'validation_virement', 'Validation d\'un virement'
+        REFUS_VIREMENT = 'refus_virement', 'Refus d\'un virement'
+        MODIFICATION_COMPTE_BANCAIRE = 'modification_compte_bancaire', 'Modification d\'un compte bancaire'
 
     auteur = models.ForeignKey('users.Administrateur', on_delete=models.SET_NULL, null=True, related_name='actions_journal')
     action = models.CharField(max_length=30, choices=Action.choices)

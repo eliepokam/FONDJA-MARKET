@@ -144,6 +144,7 @@ class ConfirmationDesMesuresTests(APITestCase):
 
     def test_le_client_ne_peut_pas_fixer_les_mesures_ni_le_cout(self):
         r = self.patch({'poids_kg': '0.01', 'cout_final': '1'}, user=self.client_user)
-        self.assertEqual(r.status_code, 403)
+        self.assertIn(r.status_code, (200, 403))      # 403 : colis déjà pris en charge ; 200 : champs réservés ignorés (colis encore « déclaré »)
         self.colis.refresh_from_db()
         self.assertIsNone(self.colis.cout_final)
+        self.assertNotEqual(self.colis.poids_kg, Decimal('0.01'))

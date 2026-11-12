@@ -16,16 +16,38 @@ Including another URLconf
 """
 
 from django.contrib import admin
-from django.urls import path, include
+from django.urls import path, include, re_path
 from django.conf import settings
-from django.conf.urls.static import static
+from django.views.static import serve
 from drf_spectacular.views import SpectacularAPIView, SpectacularSwaggerView
 from users.views import CreateStaffAccountView, UserListView, ToggleUserStatusView, DeleteUserView
 from core.views import AdminStatsView, ExportDataView
 from core.views import JournalActiviteListView
+import logging
+
+try:   # lot « API WhatsApp Meta » : FACULTATIF. Sans lui, la route du webhook n'existe simplement pas (le reste du site fonctionne).
+    from users.webhooks import WhatsappWebhookView
+except ImportError as exc:
+    WhatsappWebhookView = None
+    logging.getLogger('django').info(f"Webhook WhatsApp (Meta) non installé : route ignorée ({exc})")
+
+
+def servir_medias():
+    """
+    Photos et vidéos envoyées par les utilisateurs (/media/…).
+
+    `static()` ne fait RIEN quand DEBUG est faux : les images disparaîtraient. Pour un hébergement de test exposé sur Internet on veut
+    DEBUG=False (pas de pages d'erreur détaillées visibles de tous) ET les médias servis par Django : SERVE_MEDIA=True.
+    En production réelle, laisser Nginx servir /media/ directement (SERVE_MEDIA absent ou faux).
+    """
+    if settings.DEBUG or getattr(settings, 'SERVE_MEDIA', False):
+        prefixe = settings.MEDIA_URL.lstrip('/')
+        return [re_path(rf'^{prefixe}(?P<path>.*)$', serve, {'document_root': settings.MEDIA_ROOT})]
+    return []
+
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
+    path('django-admin/', admin.site.urls),   # « /admin » est réservé à l'espace administrateur de l'application (front)
     path('api/auth/', include('users.urls')),
     path('api/', include('shipments.urls')),
     path('api/schema/', SpectacularAPIView.as_view(), name='schema'),
@@ -41,4 +63,13 @@ urlpatterns = [
     path('api/admin/stats/', AdminStatsView.as_view()),
     path('api/admin/export/', ExportDataView.as_view()),
     path('api/admin/journal/', JournalActiviteListView.as_view()),
-] + static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
+] + servir_medias()
+
+if WhatsappWebhookView is not None:
+    urlpatterns.insert(0, path('api/webhooks/whatsapp/', WhatsappWebhookView.as_view()))   # notifications de Meta (statuts de livraison, alertes)
+
+# Pages d'erreur : JSON français pour /api/, page française sinon
+handler400 = 'config.handlers.requete_invalide'
+handler403 = 'config.handlers.acces_refuse'
+handler404 = 'config.handlers.page_introuvable'
+handler500 = 'config.handlers.erreur_serveur'

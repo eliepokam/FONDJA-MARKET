@@ -32,6 +32,8 @@ DATABASES = {
     }
 }    
 
+OTP_NUMEROS_DE_TEST = env.list('OTP_NUMEROS_DE_TEST', default=[])
+OTP_CODE_DE_TEST = env('OTP_CODE_DE_TEST', default='')
 FREEMOPAY_BASE_URL = env('FREEMOPAY_BASE_URL', default='')
 FREEMOPAY_APP_KEY = env('FREEMOPAY_APP_KEY', default='')
 FREEMOPAY_SECRET_KEY = env('FREEMOPAY_SECRET_KEY', default='')
@@ -51,9 +53,14 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
 
-
+# Adresse PUBLIQUE du site : un clic sur une notification push ouvre alors le bon colis (sans elle : la page d'accueil).
+FRONT_URL = env('FRONT_URL', default='')  
 ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=['127.0.0.1', 'localhost'])
-FIREBASE_CREDENTIALS_PATH = env('FIREBASE_CREDENTIALS_PATH')
+# Fichier d'identifiants Firebase (compte de service). Un chemin RELATIF est lu depuis le dossier du projet (BASE_DIR), et non depuis
+# le dossier d'où le serveur est lancé : c'était la cause des notifications qui partaient en local mais pas en production.
+# Sans valeur : « firebase-service-account.json » à la racine du projet.
+_firebase = env('FIREBASE_CREDENTIALS_PATH', default='firebase-service-account.json')
+FIREBASE_CREDENTIALS_PATH = str(_firebase if Path(_firebase).is_absolute() else BASE_DIR / _firebase)
 
 # Application definition
 
@@ -116,6 +123,7 @@ SIMPLE_JWT = {
 }
 
 MIDDLEWARE = [
+    'config.middleware.FrancaisMiddleware',
     'django.middleware.security.SecurityMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'corsheaders.middleware.CorsMiddleware',
@@ -127,6 +135,12 @@ MIDDLEWARE = [
 ]
 
 ROOT_URLCONF = 'config.urls'
+CSRF_FAILURE_VIEW = 'config.handlers.echec_csrf'
+
+# Contact du support affiché dans l'espace client (modifiable sans reconstruire le site)
+SUPPORT_WHATSAPP = env('SUPPORT_WHATSAPP', default='')    # format international, ex. 2376XXXXXXXX
+SUPPORT_EMAIL = env('SUPPORT_EMAIL', default='')
+SUPPORT_HORAIRES = env('SUPPORT_HORAIRES', default='')    # ex. Lun-Sam 8h-18h
 
 CORS_ALLOWED_ORIGINS = env.list(
     'CORS_ALLOWED_ORIGINS',
@@ -199,6 +213,30 @@ TWILIO_WHATSAPP_FROM = env('TWILIO_WHATSAPP_FROM', default='+14155238886')
 
 DEVCODE_SMS_API_KEY = env('DEVCODE_SMS_API_KEY')
 DEVCODE_SMS_SENDER_ID = env('DEVCODE_SMS_SENDER_ID', default='FondjaMkt')
+
+# ───────── Réglages lus par le code mais qui n'étaient plus chargés depuis le .env (ils étaient donc ignorés)
+import sys as _sys
+_EN_TEST = len(_sys.argv) > 1 and _sys.argv[1] == 'test'
+
+# Aucun SMS / WhatsApp / push réel pendant `manage.py test` ; forçable à True ailleurs (démo, préproduction).
+DISABLE_EXTERNAL_MESSAGING = env.bool('DISABLE_EXTERNAL_MESSAGING', default=_EN_TEST)
+OTP_CANAUX = env.list('OTP_CANAUX', default=[])                     # ex. « whatsapp » ou « whatsapp,sms »
+TWILIO_SANDBOX_JOIN_CODE = env('TWILIO_SANDBOX_JOIN_CODE', default='')
+TWILIO_WHATSAPP_CONTENT_SID = env('TWILIO_WHATSAPP_CONTENT_SID', default='')
+TWILIO_WHATSAPP_CONTENT_VARIABLES = env('TWILIO_WHATSAPP_CONTENT_VARIABLES', default='')
+SERVE_MEDIA = env.bool('SERVE_MEDIA', default=False)            # médias servis par Django quand DEBUG=False (hébergement ngrok)
+PRIVATE_MEDIA_ROOT = env('PRIVATE_MEDIA_ROOT', default=str(BASE_DIR / 'media_prive'))
+if env('CONSENT_VERSION', default=''):
+    CONSENT_VERSION = env('CONSENT_VERSION')
+
+# Tâches d'arrière-plan (OTP, notifications push). Par défaut elles s'exécutent dans un fil du serveur web, après la réponse :
+# AUCUN besoin de Redis ni de worker Celery. Mettre TACHES_VIA_CELERY=True seulement si Redis ET « celery -A config worker »
+# tournent en permanence. Avant, sans worker, les notifications push ne partaient jamais, et sans Redis l'appel bloquait la
+# requête (fenêtre « Validation... » qui ne se fermait pas alors que l'action était enregistrée).
+TACHES_VIA_CELERY = env.bool('TACHES_VIA_CELERY', default=False)
+# Un appel à Redis ne doit jamais bloquer une requête plus de quelques secondes.
+CELERY_BROKER_CONNECTION_TIMEOUT = 3
+CELERY_BROKER_TRANSPORT_OPTIONS = {'socket_connect_timeout': 3, 'socket_timeout': 5, 'max_retries': 1}
 
 
 # Static files (CSS, JavaScript, Images)

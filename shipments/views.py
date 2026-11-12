@@ -1,3 +1,7 @@
+from decimal import Decimal
+from django.db.models import Sum
+from django.db.models.functions import Coalesce
+from .conteneurs import enregistrer_pour, enregistrer_remplissage, evolution, pourcentage, variation
 from rest_framework.response import Response
 from rest_framework import viewsets, permissions, status
 from rest_framework.decorators import action
@@ -6,8 +10,8 @@ from rest_framework.permissions import AllowAny
 from django.utils.cache import patch_cache_control
 from django.db import transaction
 from django.db.models import Count
-from .models import Colis, LotDedouanement, Tarif, Incident
-from .serializers import ColisSerializer, ColisAgentSerializer, LotDedouanementSerializer, TarifSerializer, IncidentSerializer, PublicTarifSerializer
+from .models import AdresseTransit, Colis, LotDedouanement, Tarif, Incident
+from .serializers import AdresseTransitSerializer, ColisSerializer, ColisAgentSerializer, LotDedouanementSerializer, TarifSerializer, IncidentSerializer, PublicTarifSerializer
 from .utils import generate_code_suivi
 from .status import TransitionInvalide, changer_statut
 from users.permissions import IsClient, IsAdministrateur, IsAgent
@@ -57,6 +61,13 @@ class ColisViewSet(viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(client=self.request.user.client, code_suivi=generate_code_suivi())
 
+    def perform_update(self, serializer):
+        user = self.request.user
+        instance = serializer.instance
+        if hasattr(user, 'client') and instance.statut != Colis.Statut.DECLAREE:
+            raise PermissionDenied("Ce colis a déjà été pris en charge, il ne peut plus être modifié.")
+        serializer.save()
+
     def perform_destroy(self, instance):
         user = self.request.user
         is_owner_client = hasattr(user, 'client') and instance.client_id == user.client.id
@@ -78,9 +89,9 @@ class ColisViewSet(viewsets.ModelViewSet):
         if self.action == 'create':
             return [IsClient()]
         if self.action in ('update', 'partial_update'):
-            return [(IsAgent | IsAdministrateur)()]
+            return [(IsClient | IsAgent | IsAdministrateur)()]   # le client : seulement SON colis, tant qu'il est « déclaré » (voir perform_update)
         if self.action == 'destroy':
-            return [(IsClient | IsAgent | IsAdministrateur)()]
+            return [(IsClient | IsAdministrateur)()]          # un agent ne supprime JAMAIS un colis (traces, paiements, douane)
         return [permissions.IsAuthenticated()]
     def retrieve(self, request, *args, **kwargs):
         response = super().retrieve(request, *args, **kwargs)
@@ -88,23 +99,104 @@ class ColisViewSet(viewsets.ModelViewSet):
         return response
 
 
+class ConteneurConflit(APIException):
+    status_code = 409
+    default_detail = "Action impossible dans l'état actuel du conteneur."
+    default_code = 'conteneur_conflit'
+
+
 class LotDedouanementViewSet(viewsets.ModelViewSet):
-    queryset = LotDedouanement.objects.annotate(nb_colis=Count('colis')).order_by('-cree_le')
+    """
+    Conteneurs (lots d'embarquement). L'administrateur les crée, les modifie, les clôture et les rouvre. Les agents ne voient que les conteneurs
+    EN CHARGEMENT (un conteneur clôturé est « retiré » de leur espace) et ne peuvent rien y modifier.
+    """
     serializer_class = LotDedouanementSerializer
 
-    def perform_create(self, serializer):
-        lot = serializer.save(administrateur=self.request.user.administrateur)
-        log_action(self.request.user.administrateur, JournalActivite.Action.CREATION_LOT, lot.numero_besc)
-
-    def perform_destroy(self, instance):
-        description = f"{instance.numero_besc} ({instance.colis.count()} colis détachés)"
-        instance.delete()
-        log_action(self.request.user.administrateur, JournalActivite.Action.SUPPRESSION_LOT, description)
+    def get_queryset(self):
+        qs = LotDedouanement.objects.annotate(
+            nb_colis=Count('colis'),
+            nb_livres=Count('colis', filter=Q(colis__statut=Colis.Statut.LIVRE)),
+            volume_total=Sum(Coalesce('colis__volume_m3', 'colis__volume_declare_m3')),
+            nb_sans_volume=Count('colis', filter=Q(colis__volume_m3__isnull=True, colis__volume_declare_m3__isnull=True)),
+        ).order_by('-cree_le')
+        if not hasattr(self.request.user, 'administrateur'):
+            return qs.filter(statut=LotDedouanement.Statut.OUVERT)
+        statut = self.request.query_params.get('statut')
+        return qs.filter(statut=statut) if statut in LotDedouanement.Statut.values else qs
 
     def get_permissions(self):
         if self.request.method in permissions.SAFE_METHODS:   # GET, HEAD, OPTIONS
             return [(IsAdministrateur | IsAgent)()]
         return [IsAdministrateur()]
+
+    def perform_create(self, serializer):
+        lot = serializer.save(administrateur=self.request.user.administrateur)
+        enregistrer_remplissage(lot, forcer=True)            # point de départ de la courbe d'évolution (0 %)
+        log_action(self.request.user.administrateur, JournalActivite.Action.CREATION_LOT, lot.numero_besc,
+                   type=lot.get_type_conteneur_display(), capacite_m3=f"{lot.capacite_m3:.2f}")
+
+    def perform_update(self, serializer):
+        if serializer.instance.statut == LotDedouanement.Statut.CLOTURE:
+            raise ConteneurConflit("Ce conteneur est clôturé : rouvrez-le avant de le modifier.")
+        avant = LotDedouanement.objects.get(pk=serializer.instance.pk)
+        lot = serializer.save()
+        changements = {c: f"{getattr(avant, c)} → {getattr(lot, c)}" for c in ('numero_besc', 'type_conteneur', 'capacite_m3') if getattr(avant, c) != getattr(lot, c)}
+        if changements:
+            enregistrer_remplissage(lot, forcer=True)         # le pourcentage change si la capacité change
+            log_action(self.request.user.administrateur, JournalActivite.Action.MODIFICATION_LOT, lot.numero_besc, **changements)
+
+    def perform_destroy(self, instance):
+        if instance.statut == LotDedouanement.Statut.CLOTURE:
+            raise ConteneurConflit("Un conteneur clôturé est conservé en archive : il ne peut pas être supprimé.")
+        description = f"{instance.numero_besc} ({instance.colis.count()} colis détachés)"
+        instance.delete()
+        log_action(self.request.user.administrateur, JournalActivite.Action.SUPPRESSION_LOT, description)
+
+    @action(detail=True, methods=['post'])
+    def cloturer(self, request, pk=None):
+        """
+        Clôture le conteneur (rempli ET livré) : il quitte le tableau de bord et l'espace des agents, et n'accepte plus de colis.
+        S'il reste des colis non livrés, il faut confirmer explicitement avec « forcer ».
+        """
+        lot = self.get_object()
+        if lot.statut == LotDedouanement.Statut.CLOTURE:
+            raise ConteneurConflit("Ce conteneur est déjà clôturé.")
+        non_livres = lot.nb_colis - lot.nb_livres
+        forcer = str(request.data.get('forcer', '')).lower() in ('1', 'true', 'oui')
+        pct = float(pourcentage(Decimal(lot.volume_total or 0), lot.capacite_m3))
+        if non_livres and not forcer:
+            return Response({
+                'detail': f"{non_livres} colis de ce conteneur ne sont pas encore livrés. Confirmez pour le clôturer malgré tout.",
+                'code': 'colis_non_livres', 'non_livres': non_livres, 'pourcentage': pct,
+            }, status=409)
+        lot.statut = LotDedouanement.Statut.CLOTURE
+        lot.cloture_le = timezone.now()
+        lot.cloture_par = request.user.administrateur
+        lot.save(update_fields=['statut', 'cloture_le', 'cloture_par'])
+        enregistrer_remplissage(lot, forcer=True)
+        log_action(request.user.administrateur, JournalActivite.Action.CLOTURE_LOT, lot.numero_besc,
+                   pourcentage=pct, colis=lot.nb_colis, non_livres=non_livres)
+        return Response(self.get_serializer(self.get_queryset().get(pk=lot.pk)).data)
+
+    @action(detail=True, methods=['post'])
+    def rouvrir(self, request, pk=None):
+        lot = self.get_object()
+        if lot.statut != LotDedouanement.Statut.CLOTURE:
+            raise ConteneurConflit("Ce conteneur n'est pas clôturé.")
+        lot.statut = LotDedouanement.Statut.OUVERT
+        lot.cloture_le = None
+        lot.cloture_par = None
+        lot.save(update_fields=['statut', 'cloture_le', 'cloture_par'])
+        enregistrer_remplissage(lot, forcer=True)
+        log_action(request.user.administrateur, JournalActivite.Action.REOUVERTURE_LOT, lot.numero_besc)
+        return Response(self.get_serializer(self.get_queryset().get(pk=lot.pk)).data)
+
+    @action(detail=True, methods=['get'])
+    def evolution(self, request, pk=None):
+        """Courbe d'évolution du remplissage (les 60 derniers changements)."""
+        lot = self.get_object()
+        return Response({'variation_7j': float(variation(lot)), 'points': [
+            {**p, 'pourcentage': float(p['pourcentage']), 'volume_m3': float(p['volume_m3'])} for p in evolution(lot, 60)]})
 
 
 class TarifViewSet(viewsets.ModelViewSet):
@@ -258,8 +350,27 @@ class BulkAssignLotView(APIView):
             return Response({'detail': "colis_ids (liste d'identifiants) et lot_id sont requis."}, status=400)
 
         lot = get_object_or_404(LotDedouanement, pk=lot_id)
-        updated = Colis.objects.filter(id__in=colis_ids).update(lot=lot)
-        return Response({'detail': f'{updated} colis assignés.', 'count': updated})
+        if lot.statut == LotDedouanement.Statut.CLOTURE:
+            return Response({'detail': f"Le conteneur {lot.numero_besc} est clôturé : plus aucun colis ne peut y être ajouté. "
+                                       "Un administrateur peut le rouvrir."}, status=409)
+
+        valides, ignores = [], []
+        for colis in Colis.objects.filter(id__in=colis_ids).select_related('lot'):
+            if colis.lot_id == lot.id:
+                ignores.append({'code_suivi': colis.code_suivi, 'raison': "Déjà dans ce conteneur."})
+            elif colis.lot is not None and colis.lot.statut == LotDedouanement.Statut.CLOTURE:
+                ignores.append({'code_suivi': colis.code_suivi, 'raison': f"Dans le conteneur clôturé {colis.lot.numero_besc} : il n'en sort plus."})
+            elif colis.statut == Colis.Statut.LIVRE:
+                ignores.append({'code_suivi': colis.code_suivi, 'raison': "Colis déjà livré."})
+            else:
+                valides.append(colis.id)
+
+        anciens = set(Colis.objects.filter(id__in=valides).values_list('lot_id', flat=True))
+        updated = Colis.objects.filter(id__in=valides).update(lot=lot)
+        enregistrer_pour({lot.id, *anciens})                 # .update() ne déclenche pas les signaux : on photographie ici
+        detail = f'{updated} colis assignés.' + (f' {len(ignores)} ignoré(s).' if ignores else '')
+        return Response({'detail': detail, 'count': updated, 'ignores': ignores})
+
 
 class BulkChangeStatusView(APIView):
     permission_classes = [(IsAgent | IsAdministrateur)]
@@ -291,3 +402,47 @@ class BulkChangeStatusView(APIView):
 
         detail = f'{count} colis mis à jour.' + (f' {len(ignores)} ignoré(s).' if ignores else '')
         return Response({'detail': detail, 'count': count, 'ignores': ignores})
+
+
+def _contact_support():
+    """Coordonnées du support, lues dans les réglages du serveur (variables d'environnement) : modifiables sans reconstruire le front."""
+    from django.conf import settings
+    chiffres = ''.join(c for c in str(getattr(settings, 'SUPPORT_WHATSAPP', '') or '') if c.isdigit())
+    return {
+        'whatsapp': chiffres,
+        'email': str(getattr(settings, 'SUPPORT_EMAIL', '') or ''),
+        'horaires': str(getattr(settings, 'SUPPORT_HORAIRES', '') or ''),
+    }
+
+
+class CoordonneesView(APIView):
+    """Nos coordonnées : adresses de réception en Chine (une par mode de transport) et contact du support. Lecture pour tout compte connecté."""
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        adresses = AdresseTransit.objects.filter(actif=True)
+        return Response({'adresses': AdresseTransitSerializer(adresses, many=True).data, 'contact': _contact_support()})
+
+
+class AdminAdressesTransitListView(generics.ListAPIView):
+    """Administrateur : toutes les adresses de transit (y compris désactivées)."""
+    permission_classes = [IsAdministrateur]
+    serializer_class = AdresseTransitSerializer
+    queryset = AdresseTransit.objects.all()
+    pagination_class = None
+
+
+class AdminAdresseTransitDetailView(generics.RetrieveUpdateAPIView):
+    """Administrateur : modifier l'adresse d'un mode (aerien / maritime). L'action est inscrite au journal d'activité."""
+    permission_classes = [IsAdministrateur]
+    serializer_class = AdresseTransitSerializer
+    queryset = AdresseTransit.objects.all()
+    lookup_field = 'mode'
+    http_method_names = ['get', 'patch', 'put', 'head', 'options']
+
+    def perform_update(self, serializer):
+        avant = AdresseTransit.objects.get(pk=serializer.instance.pk)
+        adresse = serializer.save()
+        changements = {c: f"{getattr(avant, c)} → {getattr(adresse, c)}" for c in ('adresse', 'destinataire', 'telephone', 'marquage', 'instructions', 'actif')
+                       if getattr(avant, c) != getattr(adresse, c)}
+        log_action(self.request.user.administrateur, JournalActivite.Action.MODIFICATION_ADRESSE_TRANSIT, adresse.get_mode_display(), **changements)

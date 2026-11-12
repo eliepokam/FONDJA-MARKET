@@ -78,9 +78,16 @@ class CreationPaiementTests(BaseParcours):
         self.assertEqual(r.status_code, 201, r.data)
 
     def test_paiement_hors_ligne_ignore_le_numero(self):
-        r = self.creer(methode='especes', moment='a_la_livraison', telephone_paiement='677123456')
+        from payments.models import CompteBancaire
+        CompteBancaire.objects.create(banque='Banque Test', titulaire='FONDJA MARKET', numero_compte='00001')
+        r = self.creer(methode='virement', moment='hors_ligne', telephone_paiement='677123456')
         self.assertEqual(r.status_code, 201, r.data)
         self.assertIsNone(r.data['telephone_paiement'])
+
+    def test_le_paiement_a_la_livraison_n_existe_plus(self):
+        r = self.creer(methode='especes', moment='a_la_livraison', telephone_paiement='677123456')
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("n'est plus proposé", str(r.data['methode'][0]))
 
     def test_historique_filtre_par_colis(self):
         autre_colis = Colis.objects.create(client=self.client_user, code_suivi='FM-FR000002',

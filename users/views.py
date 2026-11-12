@@ -16,6 +16,7 @@ from .serializers import AgentListSerializer, RegisterSerializer, StaffAccountSe
 from .models import Utilisateur, CodeOtp, Administrateur, Agent, Client
 logger = logging.getLogger('django')
 from .permissions import IsAdministrateur, IsClient
+from .messaging import aide_bac_a_sable, canaux_actifs, choisir_canal, generer_code
 from .account_deletion import SuppressionImpossible, a_des_enregistrements_comptables, anonymiser_client, obstacles_suppression
 from rest_framework.throttling import UserRateThrottle
 from django.shortcuts import get_object_or_404
@@ -27,6 +28,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 from notifications.services import notify
+from core.taches import lancer_tache
 from notifications.models import Notification
 from rest_framework_simplejwt.token_blacklist.models import OutstandingToken, BlacklistedToken
 from rest_framework_simplejwt.views import TokenObtainPairView, TokenRefreshView
@@ -156,24 +158,20 @@ class RegisterView(generics.CreateAPIView):
 
     def perform_create(self, serializer):
         client = serializer.save()
-        code = f"{random.randint(0, 999999):06d}"
-        canal = self.request.data.get('canal', CodeOtp.Canal.SMS)
-        if canal not in CodeOtp.Canal.values:
-            canal = CodeOtp.Canal.SMS
+        code = generer_code(client.telephone)
+        canal = choisir_canal(self.request.data.get('canal'))   # SMS demandé alors que seul WhatsApp est disponible → WhatsApp
         CodeOtp.objects.create(
             utilisateur=client, code=code, canal=canal,
             expire_le=timezone.now() + timedelta(minutes=5),
         )
-        envoyer_otp_task.delay(str(client.telephone), code, canal)
+        lancer_tache(envoyer_otp_task, str(client.telephone), code, canal)
 
 class ResendOtpView(APIView):
     permission_classes = [AllowAny]
 
     def post(self, request):
         telephone = request.data.get('telephone')
-        canal = request.data.get('canal', CodeOtp.Canal.SMS)
-        if canal not in CodeOtp.Canal.values:
-            canal = CodeOtp.Canal.SMS
+        canal = choisir_canal(request.data.get('canal'))   # SMS demandé alors que seul WhatsApp est disponible → WhatsApp
 
         reponse_generique = Response({'detail': "Si ce numéro attend une vérification, un nouveau code a été envoyé."})
         utilisateur = Utilisateur.objects.filter(telephone=telephone).first()
@@ -183,12 +181,12 @@ class ResendOtpView(APIView):
 
         check_otp_cooldown(utilisateur)
 
-        code = f"{random.randint(0, 999999):06d}"
+        code = generer_code(utilisateur.telephone)
         CodeOtp.objects.create(
             utilisateur=utilisateur, code=code, canal=canal,
             expire_le=timezone.now() + timedelta(minutes=5),
         )
-        envoyer_otp_task.delay(str(utilisateur.telephone), code, canal)
+        lancer_tache(envoyer_otp_task, str(utilisateur.telephone), code, canal)
         return reponse_generique
 
 class LogoutView(APIView):
@@ -316,7 +314,7 @@ class StaffSelfRegisterView(generics.CreateAPIView):
     def perform_create(self, serializer):
         agent = serializer.save()
         for admin in Administrateur.objects.all():
-            notify(admin, f"Nouvelle demande d'inscription agent : {agent.nom} ({agent.telephone}) — en attente d'activation.", Notification.Type.GENERAL)
+            notify(admin, f"Nouvelle demande d'inscription agent : {agent.nom} ({agent.telephone}) — en attente d'activation.", Notification.Type.GENERAL, page='comptes')
 
 def _dernier_administrateur_actif(cible):
     """Vrai si `cible` est le seul administrateur actif : le suspendre ou le supprimer enfermerait tout le monde dehors."""
@@ -442,9 +440,7 @@ class ForgotPasswordRequestView(APIView):
         serializer = ForgotPasswordRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         telephone = serializer.validated_data['telephone']
-        canal = request.data.get('canal', CodeOtp.Canal.SMS)
-        if canal not in CodeOtp.Canal.values:
-            canal = CodeOtp.Canal.SMS
+        canal = choisir_canal(request.data.get('canal'))   # SMS demandé alors que seul WhatsApp est disponible → WhatsApp
 
         try:
             utilisateur = Utilisateur.objects.get(telephone=telephone)
@@ -453,12 +449,12 @@ class ForgotPasswordRequestView(APIView):
 
         check_otp_cooldown(utilisateur)
 
-        code = f"{random.randint(0, 999999):06d}"
+        code = generer_code(utilisateur.telephone)
         CodeOtp.objects.create(
             utilisateur=utilisateur, code=code, canal=canal,
             expire_le=timezone.now() + timedelta(minutes=5),
         )
-        envoyer_otp_task.delay(str(utilisateur.telephone), code, canal)   # ← vrai envoi, plus le logger.info simulé
+        lancer_tache(envoyer_otp_task, str(utilisateur.telephone), code, canal)   # ← vrai envoi, plus le logger.info simulé
         return Response({'detail': 'Si ce numéro existe, un code a été envoyé.'})
 
 
@@ -548,9 +544,7 @@ class DeletionCodeRequestView(APIView):
         serializer = ForgotPasswordRequestSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         telephone = serializer.validated_data['telephone']
-        canal = request.data.get('canal', CodeOtp.Canal.SMS)
-        if canal not in CodeOtp.Canal.values:
-            canal = CodeOtp.Canal.SMS
+        canal = choisir_canal(request.data.get('canal'))   # SMS demandé alors que seul WhatsApp est disponible → WhatsApp
 
         reponse = Response({'detail': "Si un compte existe pour ce numéro, un code de confirmation vient d'être envoyé."})
         utilisateur = Utilisateur.objects.filter(telephone=telephone).first()
@@ -559,9 +553,9 @@ class DeletionCodeRequestView(APIView):
             return reponse
 
         check_otp_cooldown(utilisateur)
-        code = f"{random.randint(0, 999999):06d}"
+        code = generer_code(utilisateur.telephone)
         CodeOtp.objects.create(utilisateur=utilisateur, code=code, canal=canal, expire_le=timezone.now() + timedelta(minutes=5))
-        envoyer_otp_task.delay(str(utilisateur.telephone), code, canal)
+        lancer_tache(envoyer_otp_task, str(utilisateur.telephone), code, canal)
         return reponse
 
 
@@ -606,3 +600,15 @@ class ConsentView(APIView):
         client = request.user.client
         client.enregistrer_consentement()
         return Response({'consentement_a_jour': True})
+
+
+class OtpConfigView(APIView):
+    """Canaux réellement disponibles pour recevoir un code, et aide « bac à sable WhatsApp » en phase de test (lecture publique)."""
+    permission_classes = [AllowAny]
+    authentication_classes = []
+    throttle_classes = []
+
+    def get(self, request):
+        reponse = Response({'canaux': canaux_actifs(), 'whatsapp_sandbox': aide_bac_a_sable()})
+        reponse['Cache-Control'] = 'public, max-age=60'
+        return reponse

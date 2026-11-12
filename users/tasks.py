@@ -2,7 +2,7 @@ import logging
 import requests
 from celery import shared_task
 from django.conf import settings
-from twilio.rest import Client
+from .messaging import EnvoiImpossible, envoyer_whatsapp_twilio, est_numero_de_test
 
 logger = logging.getLogger('django')
 
@@ -39,27 +39,31 @@ def _envoyer_sms_devcode(telephone, message):
     return data
 
 
-def _envoyer_whatsapp_twilio(telephone, message):
-    client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-    client.messages.create(
-        body=message,
-        from_=f"whatsapp:{settings.TWILIO_WHATSAPP_FROM}",
-        to=f"whatsapp:{telephone}",
-    )
+def _envoyer_whatsapp_twilio(telephone, code):
+    return envoyer_whatsapp_twilio(telephone, code)
 
 
 @shared_task(bind=True, max_retries=3, default_retry_delay=10)
 def envoyer_otp_task(self, telephone, code, canal):
     message = f"Votre code Fondja Market est : {code}. Il expire dans 5 minutes."
+    if est_numero_de_test(telephone):
+        logger.info(f"[NUMÉRO DE TEST] aucun message envoyé à {telephone} : utilisez le code de test (OTP_CODE_DE_TEST)")
+        return
     if getattr(settings, 'DISABLE_EXTERNAL_MESSAGING', False):
         logger.info(f"[ENVOI DÉSACTIVÉ] OTP pour {telephone} via {canal}")
         return
     try:
         if canal == 'whatsapp':
-            _envoyer_whatsapp_twilio(telephone, message)
-        else:
-            _envoyer_sms_devcode(telephone, message)
+            sid = _envoyer_whatsapp_twilio(telephone, code)
+            logger.info(f"OTP envoyé à {telephone} via whatsapp (message Twilio {sid})")
+            return
+        _envoyer_sms_devcode(telephone, message)
         logger.info(f"OTP envoyé à {telephone} via {canal}")
+
+    except EnvoiImpossible as exc:
+        # Échec définitif (destinataire pas dans le bac à sable, identifiants refusés...) : on arrête, avec une explication lisible.
+        logger.error(f"Échec DÉFINITIF OTP {telephone} via {canal} : {exc.explication}")
+        return
 
     except DevCodeSMSError as exc:
         # Certaines erreurs sont définitives : retenter n'y changera rien
